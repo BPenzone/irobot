@@ -14,11 +14,12 @@
 #define H IR_SCREEN_H
 
 static int16_t span_min[H], span_max[H];
+static int pitch;
 
 static inline void plot(uint8_t *bm, int32_t x, int32_t y, uint8_t c)
 {
     if ((uint32_t)x < W && (uint32_t)y < H)
-        bm[y * W + x] = c;
+        bm[y * pitch + x] = c;
 }
 
 // Clip a line to the screen (Liang-Barsky). Returns false if it misses.
@@ -139,12 +140,13 @@ static void draw_polygon(uint8_t *bm, const int32_t *pts, int count, uint8_t c)
         if (x0 < 0) x0 = 0;
         if (x1 > W) x1 = W;
         if (x1 > x0)
-            memset(bm + y * W + x0, c, (size_t)(x1 - x0));
+            memset(bm + y * pitch + x0, c, (size_t)(x1 - x0));
     }
 }
 
-void ir_raster_list(uint8_t *bm, const int32_t *words, uint32_t used, ir_stats_t *stats)
+void ir_raster_list(uint8_t *bm, int bm_pitch, const int32_t *words, uint32_t used, ir_stats_t *stats)
 {
+    pitch = bm_pitch;
     uint32_t i = 0;
     while (i < used)
     {
@@ -158,7 +160,8 @@ void ir_raster_list(uint8_t *bm, const int32_t *words, uint32_t used, ir_stats_t
         switch (type)
         {
         case IR_CMD_ERASE:
-            memset(bm, 0, W * H);
+            for (int y = 0; y < H; y++)
+                memset(bm + y * pitch, 0, W);
             break;
 
         case IR_CMD_POLYGON:

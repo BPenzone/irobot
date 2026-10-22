@@ -47,7 +47,6 @@
 #define TILE_SIZE_Y 64
 #define TILE_SIZE_Z 128
 
-#define M ir_mathbox_mem
 
 static ir_stats_t *stats;
 
@@ -124,17 +123,17 @@ static void load_matrix(int32_t *dst, uint16_t addr)
     if (addr == VIEW_MATRIX_ALIAS)
         addr = VIEW_MATRIX;
     for (int n = 0; n < 9; n++)
-        dst[n] = s16(M[(addr + n) & 0x7FFF]);
+        dst[n] = s16(M((addr + n) & 0x7FFF));
 }
 
 static void get_camera(void)
 {
-    light_x = s16(M[LIGHT_VECTOR + 0]);
-    light_y = s16(M[LIGHT_VECTOR + 1]);
-    light_z = s16(M[LIGHT_VECTOR + 2]);
-    cam_x = s16(M[VIEW_POSITION + 0]);
-    cam_y = s16(M[VIEW_POSITION + 1]);
-    cam_z = s16(M[VIEW_POSITION + 2]);
+    light_x = s16(M(LIGHT_VECTOR + 0));
+    light_y = s16(M(LIGHT_VECTOR + 1));
+    light_z = s16(M(LIGHT_VECTOR + 2));
+    cam_x = s16(M(VIEW_POSITION + 0));
+    cam_y = s16(M(VIEW_POSITION + 1));
+    cam_z = s16(M(VIEW_POSITION + 2));
 }
 
 static inline void rotate(const int32_t *m, int32_t *x, int32_t *y, int32_t *z)
@@ -170,9 +169,9 @@ static uint16_t vertex_table;
 static void fetch_point(uint16_t insn, int32_t *x, int32_t *y, int32_t *z)
 {
     uint16_t a = (uint16_t)(vertex_table + (insn & 0x3FFF));
-    *x = s16(M[a & 0x7FFF]);
-    *y = s16(M[(a + 1) & 0x7FFF]);
-    *z = s16(M[(a + 2) & 0x7FFF]);
+    *x = s16(M(a & 0x7FFF));
+    *y = s16(M((a + 1) & 0x7FFF));
+    *z = s16(M((a + 2) & 0x7FFF));
     rotate(rot_matrix, x, y, z);
     *x += obj_dx;
     *y += obj_dy;
@@ -188,17 +187,17 @@ static bool render_primitive(uint16_t addr, uint16_t control)
     int color = control & 0x3F;
     int32_t x, y, z;
 
-    uint16_t insn = M[addr++ & 0x7FFF];
+    uint16_t insn = M(addr++ & 0x7FFF);
     if (!(insn & 0x4000))
     {
         // First word is a normal vector; rotate it (no translation).
         uint16_t a = (uint16_t)(vertex_table + (insn & 0x3FFF));
-        int32_t nx = s16(M[a & 0x7FFF]);
-        int32_t ny = s16(M[(a + 1) & 0x7FFF]);
-        int32_t nz = s16(M[(a + 2) & 0x7FFF]);
+        int32_t nx = s16(M(a & 0x7FFF));
+        int32_t ny = s16(M((a + 1) & 0x7FFF));
+        int32_t nz = s16(M((a + 2) & 0x7FFF));
         rotate(rot_matrix, &nx, &ny, &nz);
 
-        insn = M[addr++ & 0x7FFF];
+        insn = M(addr++ & 0x7FFF);
         fetch_point(insn, &x, &y, &z);
         if (nx * x + ny * y + nz * z <= 0)
             return false;
@@ -224,7 +223,7 @@ static bool render_primitive(uint16_t addr, uint16_t control)
         }
         if (insn & 0x8000)
             break;
-        insn = M[addr++ & 0x7FFF];
+        insn = M(addr++ & 0x7FFF);
         fetch_point(insn, &x, &y, &z);
     }
     if (count > IR_MAX_POINTS)
@@ -258,14 +257,14 @@ static bool render_primitive(uint16_t addr, uint16_t control)
 // pairs of (primitive address, control word) until an address >= 0x8000.
 static void render_primitive_list(uint16_t addr)
 {
-    vertex_table = M[addr++ & 0x7FFF];
+    vertex_table = M(addr++ & 0x7FFF);
 
     for (int guard = 0; guard < 4096; guard++)
     {
-        uint16_t prim = M[addr++ & 0x7FFF];
+        uint16_t prim = M(addr++ & 0x7FFF);
         if (prim >= 0x8000)
             return;
-        uint16_t control = M[addr++ & 0x7FFF];
+        uint16_t control = M(addr++ & 0x7FFF);
         bool visible = render_primitive(prim, control);
 
         // Bit 15 marks a branch over hidden-surface groups:
@@ -282,9 +281,9 @@ static void render_primitive_list(uint16_t addr)
             if (!branch)
                 addr++;
             else if (control & 0x4000)
-                addr = M[addr & 0x7FFF];
+                addr = M(addr & 0x7FFF);
             else
-                addr = (uint16_t)(addr + M[addr & 0x7FFF]);
+                addr = (uint16_t)(addr + M(addr & 0x7FFF));
         }
     }
 }
@@ -310,23 +309,23 @@ static void render_object(uint16_t addr, int depth)
             return;
         stats->objects++;
 
-        uint16_t control = M[addr + 3];
+        uint16_t control = M(addr + 3);
         if (!(control & 0x4000))
-            load_matrix(cam_matrix, M[(addr + 4) & 0x7FFF]);
+            load_matrix(cam_matrix, M((addr + 4) & 0x7FFF));
 
         int child = 5;
         if (!(control & 0x0800))
         {
-            prim_list = M[(addr + 6) & 0x7FFF];
+            prim_list = M((addr + 6) & 0x7FFF);
             if (prim_list >= 0x8000)
                 return;
-            load_matrix(rot_matrix, M[(addr + 5) & 0x7FFF]);
+            load_matrix(rot_matrix, M((addr + 5) & 0x7FFF));
             child = 7;
         }
         if (prim_list >= 0x8000)
             return;
 
-        int32_t x = s16(M[addr]), y = s16(M[(addr + 1) & 0x7FFF]), z = s16(M[(addr + 2) & 0x7FFF]);
+        int32_t x = s16(M(addr)), y = s16(M((addr + 1) & 0x7FFF)), z = s16(M((addr + 2) & 0x7FFF));
         if (control & 0x0400)
         {
             rotate(cam_matrix, &x, &y, &z);
@@ -349,7 +348,7 @@ static void render_object(uint16_t addr, int depth)
 
         for (;;)
         {
-            uint16_t word = M[(addr + child++) & 0x7FFF];
+            uint16_t word = M((addr + child++) & 0x7FFF);
             if (word == 0 || word >= 0x8000)
                 return;
             if (word == 0x0002)
@@ -548,9 +547,9 @@ objects:
     // Objects standing on this tile are drawn right after it.
     if (tile_a & 0x80)
     {
-        int count = M[terrain_objects++ & 0x7FFF] + 1;
+        int count = M(terrain_objects++ & 0x7FFF) + 1;
         while (count-- > 0)
-            render_object(M[terrain_objects++ & 0x7FFF], 0);
+            render_object(M(terrain_objects++ & 0x7FFF), 0);
     }
 }
 
@@ -560,9 +559,9 @@ static void draw_terrain_row(int row,
     int32_t blx, int32_t bly, int32_t blz,
     int32_t brx, int32_t bry, int32_t brz)
 {
-    const uint16_t *next = &M[TERRAIN_TILES + (((row + 1) & 31) << 4)];
-    const uint16_t *cur  = &M[TERRAIN_TILES + (row << 4)];
-    const uint16_t *prev = &M[TERRAIN_TILES + (((row + 31) & 31) << 4)];
+    const uint16_t *next = &M(TERRAIN_TILES + (((row + 1) & 31) << 4));
+    const uint16_t *cur  = &M(TERRAIN_TILES + (row << 4));
+    const uint16_t *prev = &M(TERRAIN_TILES + (((row + 31) & 31) << 4));
 
     // Left edge towards the middle, not including the middle.
     if (left_of_camera > 0)
@@ -620,14 +619,14 @@ static void render_terrain(void)
 {
     stats->terrains++;
 
-    terrain_mode = M[TERRAIN_MODE];
-    terrain_objects = M[TERRAIN_OBJECTS];
-    terrain_rows_left = s16(M[TERRAIN_Z_MAX]) - s16(M[TERRAIN_Z_MIN]) + 1;
+    terrain_mode = M(TERRAIN_MODE);
+    terrain_objects = M(TERRAIN_OBJECTS);
+    terrain_rows_left = s16(M(TERRAIN_Z_MAX)) - s16(M(TERRAIN_Z_MIN)) + 1;
 
     left_of_camera = cam_x >> 7;
     right_of_camera = 16 - left_of_camera;
 
-    int row = (M[TERRAIN_Z_OFS] >> 4) + M[TERRAIN_Z_MAX] + 1024;
+    int row = (M(TERRAIN_Z_OFS) >> 4) + M(TERRAIN_Z_MAX) + 1024;
 
     load_matrix(cam_matrix, VIEW_MATRIX);
     const int32_t *m = cam_matrix;
@@ -642,9 +641,9 @@ static void render_terrain(void)
     zv[1] = (TILE_SIZE_Z * m[5]) >> 14;
     zv[2] = (TILE_SIZE_Z * m[8]) >> 14;
 
-    int32_t x = TILE_SIZE_X - (s16(M[TERRAIN_X_OFS]) << 7) - s16(M[TERRAIN_X]);
+    int32_t x = TILE_SIZE_X - (s16(M(TERRAIN_X_OFS)) << 7) - s16(M(TERRAIN_X));
     int32_t y = -cam_y;
-    int32_t z = (s16(M[TERRAIN_Z_MAX]) << 7) - s16(M[TERRAIN_Z_FRAC]);
+    int32_t z = (s16(M(TERRAIN_Z_MAX)) << 7) - s16(M(TERRAIN_Z_FRAC));
 
     int32_t tl[3], tr[3], bl[3], br[3];
     tl[0] = (x * m[0] + y * m[1] + z * m[2]) >> 14;
@@ -679,7 +678,7 @@ void ir_mathbox_start(ir_stats_t *s)
     stats = s;
     stats->mathbox_commands++;
 
-    uint16_t command = M[0];
+    uint16_t command = M(0);
     switch (command)
     {
     case CMD_TERRAIN:
@@ -689,16 +688,16 @@ void ir_mathbox_start(ir_stats_t *s)
     case CMD_TERRAIN_REENTRANT:
         break;
     case CMD_ROLL:
-        roll(&M[M[6] & 0x7FFF], s16(M[7]), s16(M[8]));
+        roll(&M(M(6) & 0x7FFF), s16(M(7)), s16(M(8)));
         break;
     case CMD_YAW:
-        yaw(&M[M[6] & 0x7FFF], s16(M[7]), s16(M[8]));
+        yaw(&M(M(6) & 0x7FFF), s16(M(7)), s16(M(8)));
         break;
     case CMD_PITCH:
-        pitch(&M[M[6] & 0x7FFF], s16(M[7]), s16(M[8]));
+        pitch(&M(M(6) & 0x7FFF), s16(M(7)), s16(M(8)));
         break;
     case CMD_CONCATENATE:
-        concatenate(&M[M[0x7B] & 0x7FFF], &M[M[0x7C] & 0x7FFF], &M[M[0x7D] & 0x7FFF]);
+        concatenate(&M(M(0x7B) & 0x7FFF), &M(M(0x7C) & 0x7FFF), &M(M(0x7D) & 0x7FFF));
         break;
     default:
         if (command < 0x8000)

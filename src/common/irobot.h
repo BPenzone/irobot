@@ -36,6 +36,22 @@ typedef struct
     const uint8_t *r208, *r209, *r210;          // fixed program, 8K/16K/16K
 } ir_roms_t;
 
+// The ROMs rearranged the way the machine uses them. The PC harness builds
+// this in memory; the 32X build stores a prebuilt copy in cartridge ROM so
+// it never has to be copied into the SH-2's small RAM. Every field is bytes,
+// so the layout is the same on any host.
+typedef struct
+{
+    uint8_t prog_banked[6][0x2000];     // $4000-$5FFF banks, self test patched
+    uint8_t prog_fixed[0xA000];         // $6000-$FFFF
+    uint8_t mathrom_be[6][0x2000];      // math box words 0x2000-0x7FFF, high byte first
+    uint8_t charset[64 * 8];            // alphanumerics, MSB is leftmost
+    uint8_t alpha_prom[0x20];           // 136029-125
+} ir_image_t;
+
+// Fill `image` from a ROM set.
+void ir_prepare_image(const ir_roms_t *roms, ir_image_t *image);
+
 // Player inputs; true means pressed.
 typedef struct
 {
@@ -57,12 +73,23 @@ typedef struct
     uint32_t cpu_faults;
 } ir_stats_t;
 
-// Initialize the machine from a ROM set and perform a cold reset.
-void ir_init(const ir_roms_t *roms);
+// Initialize the machine from a prepared image and perform a cold reset.
+// The image must stay valid while the machine runs.
+void ir_init(const ir_image_t *image);
 
 // Run the 6809 for one video frame (256 scanlines). Returns false if the
 // CPU faulted (illegal instruction or unmapped access it cannot survive).
 bool ir_run_frame(const ir_inputs_t *inputs);
+
+// Alphanumeric overlay: 32 x 32 bytes of character RAM (29 rows visible),
+// 64 characters of 8 rows each in the character ROM, and the 4-color
+// palette currently selected (color 0 is transparent).
+const uint8_t *ir_alpha_ram(void);
+const uint8_t *ir_alpha_charset(void);  // 64 chars x 8 rows, MSB is leftmost
+const uint32_t *ir_alpha_palette(void); // as 0x00RRGGBB
+int ir_alpha_palette_select(void);      // 0 or 1
+
+// Software video backend (video_soft.c), used by the PC harness.
 
 // The 8-bit bitmap currently being displayed, IR_SCREEN_W x IR_SCREEN_H,
 // each byte a 6-bit index into the color RAM palette.
@@ -70,13 +97,6 @@ const uint8_t *ir_display_bitmap(void);
 
 // 64-entry palette for the bitmap, as 0x00RRGGBB.
 const uint32_t *ir_bitmap_palette(void);
-
-// Alphanumeric overlay: 32 x 32 bytes of character RAM (29 rows visible),
-// 64 characters of 8 rows each in the character ROM, and the 4-color
-// palette currently selected (color 0 is transparent).
-const uint8_t *ir_alpha_ram(void);
-const uint8_t *ir_alpha_charset(void);  // 64 chars x 8 rows, MSB is leftmost
-const uint32_t *ir_alpha_palette(void);
 
 // Composite the bitmap and alphanumerics into 0x00RRGGBB pixels.
 void ir_compose_rgb(uint32_t *out);

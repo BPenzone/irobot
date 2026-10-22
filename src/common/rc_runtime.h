@@ -36,20 +36,40 @@ extern uint8_t rc_test_mem[0x10000];
 extern uint8_t ir_ram0[0x800];          // $0000-$07FF, always mapped
 #endif
 
+// The 32X build puts the most-run blocks (tools/recomp/hot.txt) in SDRAM:
+// running code from cartridge ROM is slow on real hardware.
+#ifdef RC_HOT_SECTION
+#define RC_HOT __attribute__((section(".rc_hot")))
+#else
+#define RC_HOT
+#endif
+
+// Helpers the compiler may keep out of line, which every block calls.
+#define RC_FN static inline RC_HOT
+
+// Go to a block known at compile time. The 32X build jumps straight to it
+// (a sibling call) rather than through the machine loop; the time check at
+// the start of every block still ends the chain.
+#ifdef RC_TAILCALL
+#define RC_NEXT(f) return f()
+#else
+#define RC_NEXT(f) return (void *)f
+#endif
+
 #define C ir_cpu
 #define CLK(n) (C.Clock += (n))
 #define OUT_OF_TIME() ((int32_t)(C.Clock - rc_limit) >= 0)
 
 // A polling loop of `n` cycles per pass that can't exit before the time
 // slice ends: run its remaining passes at once.
-static inline void rc_spin(uint32_t n)
+RC_FN void rc_spin(uint32_t n)
 {
     int32_t left = (int32_t)(rc_limit - C.Clock);
     if (left > 0)
         C.Clock += ((uint32_t)left + n - 1) / n * n;
 }
 
-static inline uint8_t RD(uint16_t a)
+RC_FN uint8_t RD(uint16_t a)
 {
     const uint8_t *p = C.ReadPointer[a >> 8];
     if (p)
@@ -57,7 +77,7 @@ static inline uint8_t RD(uint16_t a)
     return C.ReadFunction[a >> 8](a);
 }
 
-static inline void WR(uint16_t a, uint8_t v)
+RC_FN void WR(uint16_t a, uint8_t v)
 {
     uint8_t *p = C.WritePointer[a >> 8];
     if (p)
@@ -66,29 +86,36 @@ static inline void WR(uint16_t a, uint8_t v)
         C.WriteFunction[a >> 8](a, v);
 }
 
-static inline uint16_t RD16(uint16_t a)
+RC_FN uint16_t RD16(uint16_t a)
 {
     uint8_t hi = RD(a);
     return (uint16_t)(hi << 8 | RD((uint16_t)(a + 1)));
 }
 
-static inline void WR16(uint16_t a, uint16_t v)
+RC_FN void WR16(uint16_t a, uint16_t v)
 {
     WR(a, (uint8_t)(v >> 8));
     WR((uint16_t)(a + 1), (uint8_t)v);
 }
 
+// Direct page accesses when DP is not 0, which the game never does. Named
+// apart so that recomp.py knows they don't need the clock up to date.
+#define RDP RD
+#define WRP WR
+#define RDP16 RD16
+#define WRP16 WR16
+
 #define PUSH8(sp, v)  do { sp = (uint16_t)(sp - 1); WR(sp, (v)); } while (0)
 #define PUSH16(sp, v) do { uint16_t v_ = (v); PUSH8(sp, (uint8_t)v_); PUSH8(sp, (uint8_t)(v_ >> 8)); } while (0)
 
-static inline uint8_t rc_pull8(uint16_t *sp)
+RC_FN uint8_t rc_pull8(uint16_t *sp)
 {
     uint8_t v = RD(*sp);
     *sp = (uint16_t)(*sp + 1);
     return v;
 }
 
-static inline uint16_t rc_pull16(uint16_t *sp)
+RC_FN uint16_t rc_pull16(uint16_t *sp)
 {
     uint8_t hi = rc_pull8(sp);
     return (uint16_t)(hi << 8 | rc_pull8(sp));
@@ -97,13 +124,13 @@ static inline uint16_t rc_pull16(uint16_t *sp)
 #define PULL8(sp)  rc_pull8(&(sp))
 #define PULL16(sp) rc_pull16(&(sp))
 
-static inline uint8_t rc_get_cc(void)
+RC_FN uint8_t rc_get_cc(void)
 {
     return (uint8_t)(C.CC_C | C.CC_V << 1 | C.CC_Z << 2 | C.CC_N << 3 |
                      C.CC_I << 4 | C.CC_H << 5 | C.CC_F << 6 | C.CC_E << 7);
 }
 
-static inline void rc_set_cc(uint8_t r)
+RC_FN void rc_set_cc(uint8_t r)
 {
     C.CC_C = r & 1;
     C.CC_V = (r >> 1) & 1;
@@ -117,13 +144,13 @@ static inline void rc_set_cc(uint8_t r)
 
 // Control transfer to an address only known at run time.
 #ifdef RC_SELFTEST
-static inline void *rc_dispatch(uint16_t pc)
+RC_FN void *rc_dispatch(uint16_t pc)
 {
     C.PC.w = pc;
     return 0;
 }
 #else
-static inline void *rc_dispatch(uint16_t pc)
+RC_FN void *rc_dispatch(uint16_t pc)
 {
     rc_block_t b = 0;
     if (pc >= 0x6000)
@@ -137,166 +164,10 @@ static inline void *rc_dispatch(uint16_t pc)
 #endif
 
 // ---------------------------------------------------------------------------
-// Flags
+// Flags (the generator computes most of them inline; see recomp.py)
 // ---------------------------------------------------------------------------
 
-static inline void rc_tst(uint8_t v)
-{
-    C.CC_N = v >> 7;
-    C.CC_Z = (v == 0);
-    C.CC_V = 0;
-}
-
-static inline void rc_tst16(uint16_t v)
-{
-    C.CC_N = v >> 15;
-    C.CC_Z = (v == 0);
-    C.CC_V = 0;
-}
-
-static inline uint8_t rc_neg(uint8_t s)
-{
-    uint8_t r = (uint8_t)-s;
-    C.CC_N = r >> 7;
-    C.CC_Z = (r == 0);
-    C.CC_V = (s == 0x80);
-    C.CC_C = (s != 0);
-    return r;
-}
-
-static inline uint8_t rc_com(uint8_t s)
-{
-    uint8_t r = (uint8_t)~s;
-    C.CC_N = r >> 7;
-    C.CC_Z = (r == 0);
-    C.CC_V = 0;
-    C.CC_C = 1;
-    return r;
-}
-
-static inline uint8_t rc_lsr(uint8_t s)
-{
-    uint8_t r = s >> 1;
-    C.CC_N = 0;
-    C.CC_Z = (r == 0);
-    C.CC_C = s & 1;
-    return r;
-}
-
-static inline uint8_t rc_ror(uint8_t s)
-{
-    uint8_t r = (uint8_t)(s >> 1 | C.CC_C << 7);
-    C.CC_N = r >> 7;
-    C.CC_Z = (r == 0);
-    C.CC_C = s & 1;
-    return r;
-}
-
-static inline uint8_t rc_asr(uint8_t s)
-{
-    uint8_t r = (uint8_t)((s >> 1) | (s & 0x80));
-    C.CC_N = r >> 7;
-    C.CC_Z = (r == 0);
-    C.CC_C = s & 1;
-    return r;
-}
-
-static inline uint8_t rc_asl(uint8_t s)
-{
-    uint8_t r = (uint8_t)(s << 1);
-    C.CC_N = r >> 7;
-    C.CC_Z = (r == 0);
-    C.CC_V = ((s ^ r) >> 7) & 1;
-    C.CC_C = s >> 7;
-    return r;
-}
-
-static inline uint8_t rc_rol(uint8_t s)
-{
-    uint8_t r = (uint8_t)(s << 1 | C.CC_C);
-    C.CC_N = r >> 7;
-    C.CC_Z = (r == 0);
-    C.CC_V = ((s ^ r) >> 7) & 1;
-    C.CC_C = s >> 7;
-    return r;
-}
-
-static inline uint8_t rc_dec(uint8_t s)
-{
-    uint8_t r = (uint8_t)(s - 1);
-    C.CC_N = r >> 7;
-    C.CC_Z = (r == 0);
-    C.CC_V = (s == 0x80);
-    return r;
-}
-
-static inline uint8_t rc_inc(uint8_t s)
-{
-    uint8_t r = (uint8_t)(s + 1);
-    C.CC_N = r >> 7;
-    C.CC_Z = (r == 0);
-    C.CC_V = (s == 0x7F);
-    return r;
-}
-
-static inline uint8_t rc_sub(uint8_t d, uint8_t s)
-{
-    unsigned r = (unsigned)d - s;
-    C.CC_N = (r >> 7) & 1;
-    C.CC_Z = ((uint8_t)r == 0);
-    C.CC_C = (r >> 8) & 1;
-    C.CC_V = (((d ^ s) & (d ^ r)) >> 7) & 1;
-    return (uint8_t)r;
-}
-
-static inline void rc_cmp(uint8_t d, uint8_t s)
-{
-    (void)rc_sub(d, s);
-}
-
-static inline uint8_t rc_sbc(uint8_t d, uint8_t s)
-{
-    unsigned r = (unsigned)d - s - C.CC_C;
-    C.CC_N = (r >> 7) & 1;
-    C.CC_Z = ((uint8_t)r == 0);
-    C.CC_C = (r >> 8) & 1;
-    C.CC_V = (((d ^ s) & (d ^ r)) >> 7) & 1;
-    return (uint8_t)r;
-}
-
-static inline uint8_t rc_and(uint8_t d, uint8_t s)
-{
-    uint8_t r = d & s;
-    rc_tst(r);
-    return r;
-}
-
-static inline uint8_t rc_eor(uint8_t d, uint8_t s)
-{
-    uint8_t r = d ^ s;
-    rc_tst(r);
-    return r;
-}
-
-static inline uint8_t rc_or(uint8_t d, uint8_t s)
-{
-    uint8_t r = d | s;
-    rc_tst(r);
-    return r;
-}
-
-static inline uint8_t rc_adc(uint8_t d, uint8_t s)
-{
-    unsigned r = (unsigned)d + s + C.CC_C;
-    C.CC_H = ((d ^ s ^ r) >> 4) & 1;
-    C.CC_N = (r >> 7) & 1;
-    C.CC_Z = ((uint8_t)r == 0);
-    C.CC_C = (r >> 8) & 1;
-    C.CC_V = ((~(d ^ s) & (d ^ r)) >> 7) & 1;
-    return (uint8_t)r;
-}
-
-static inline uint8_t rc_add(uint8_t d, uint8_t s)
+RC_FN uint8_t rc_add(uint8_t d, uint8_t s)
 {
     unsigned r = (unsigned)d + s;
     C.CC_H = ((d ^ s ^ r) >> 4) & 1;
@@ -307,32 +178,7 @@ static inline uint8_t rc_add(uint8_t d, uint8_t s)
     return (uint8_t)r;
 }
 
-static inline uint16_t rc_sub16(uint16_t d, uint16_t s)
-{
-    uint32_t r = (uint32_t)d - s;
-    C.CC_N = (r >> 15) & 1;
-    C.CC_Z = ((uint16_t)r == 0);
-    C.CC_C = (r >> 16) & 1;
-    C.CC_V = (((d ^ s) & (d ^ r)) >> 15) & 1;
-    return (uint16_t)r;
-}
-
-static inline void rc_cmp16(uint16_t d, uint16_t s)
-{
-    (void)rc_sub16(d, s);
-}
-
-static inline uint16_t rc_add16(uint16_t d, uint16_t s)
-{
-    uint32_t r = (uint32_t)d + s;
-    C.CC_N = (r >> 15) & 1;
-    C.CC_Z = ((uint16_t)r == 0);
-    C.CC_C = (r >> 16) & 1;
-    C.CC_V = ((~(d ^ s) & (d ^ r)) >> 15) & 1;
-    return (uint16_t)r;
-}
-
-static inline void rc_daa(void)
+RC_FN void rc_daa(void)
 {
     uint8_t msn = C.A >> 4, lsn = C.A & 0x0F, cf = 0;
     bool h = C.CC_H, c = C.CC_C;

@@ -231,17 +231,19 @@ static void draw_polygon(uint8_t *bm, const int32_t *pts, int count, uint8_t c)
 #undef BACK
 }
 
-void ir_raster_list(uint8_t *bm, int bm_pitch, const int32_t *words, uint32_t used, ir_stats_t *stats)
+void ir_raster_list(uint8_t *bm, int bm_pitch, const ir_dword_t *words, uint32_t used, ir_stats_t *stats)
 {
     pitch = bm_pitch;
     uint32_t i = 0;
     while (i < used)
     {
-        uint32_t header = (uint32_t)words[i++];
+        uint32_t header = (uint16_t)words[i++];
         int type = (header >> 12) & 0xF;
         int count = (header >> 6) & 0x3F;
         uint8_t color = (uint8_t)((header & 0x3F) + IR_PIXEL_BASE);
-        const int32_t *pts = &words[i];
+        int32_t pts[IR_MAX_POINTS * 2];
+        for (int n = 0; n < count * 2; n++)
+            pts[n] = words[i + n];
         i += (uint32_t)count * 2;
 
         switch (type)

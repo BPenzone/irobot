@@ -18,10 +18,16 @@ void ir_video_reset(void)
     shown = 0;
 }
 
-int32_t *ir_video_submit(int target, int32_t *words, uint32_t used, ir_stats_t *stats)
+ir_dword_t *ir_video_submit(int target, ir_dword_t *words, uint32_t used, ir_stats_t *stats)
 {
     ir_raster_list(bitmap[target], IR_SCREEN_W, words, used, stats);
     return words;
+}
+
+bool ir_video_mathbox(ir_stats_t *stats)
+{
+    (void)stats;
+    return false;
 }
 
 void ir_video_show(int index)

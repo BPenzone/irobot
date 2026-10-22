@@ -4,7 +4,7 @@
 Copyright 2026 the irobot 32X port authors. GPL-3.0-or-later, see LICENSE.
 
 Usage:
-  recomp.py IMAGE OUT.c [--hints FILE] [--exit-at ADDR ...]
+  recomp.py IMAGE OUT.c [--hints FILE] [--hot FILE] [--exit-at ADDR ...]
   recomp.py --selftest OUT.c [--seed N] [--count N]
 
 IMAGE is the prepared ROM image (build/.../irobot.img, layout ir_image_t).
@@ -23,6 +23,7 @@ cycle budget, which is also how the machine forces an early exit.
 """
 
 import argparse
+import re
 import random
 import sys
 
@@ -132,7 +133,7 @@ for col, mode, c16, cld in ((0x00, 'imm16', 5, 4), (0x10, 'dir', 7, 6),
 
 # Instructions left to the interpreter: they wait for interrupts or are rare
 # enough that translating them buys nothing.
-INTERPRET = {'SYNC', 'CWAI', 'SWI', 'SWI2', 'SWI3', 'RTI'}
+INTERPRET = {'SYNC', 'CWAI', 'SWI', 'SWI2', 'SWI3'}
 
 REG16 = {0: 'D', 1: 'X', 2: 'Y', 3: 'U', 4: 'S', 5: 'PC'}
 REG8 = {8: 'A', 9: 'B', 10: 'CC', 11: 'DP'}
@@ -341,7 +342,7 @@ def static_targets(i):
 
 def ends_block(i):
     """True if execution never falls through to the next instruction."""
-    if i.mn in ('BRA', 'LBRA', 'JMP', 'RTS'):
+    if i.mn in ('BRA', 'LBRA', 'JMP', 'RTS', 'RTI'):
         return True
     if i.mn in ('PULS', 'PULU') and i.value & 0x80:
         return True
@@ -409,6 +410,134 @@ def discover(image, entries):
 # C generation
 # ---------------------------------------------------------------------------
 
+def dp_offset(ea):
+    """The offset of a direct page address expression from ea(), or None.
+    The game runs with DP = 0, where it addresses RAM directly."""
+    m = re.match(r'\(uint16_t\)\(C\.DP << 8 \| 0x([0-9A-F]{2})\)$', ea)
+    return int(m.group(1), 16) if m else None
+
+
+# ---------------------------------------------------------------------------
+# Condition code liveness
+#
+# A flag an instruction sets is only computed if some instruction may read
+# it before it is set again. Control flow the recompiler can't follow (RTS,
+# computed jumps, a change of bank) counts as reading every flag. Interrupts
+# don't: they save CC and RTI restores it, so they read what the code they
+# interrupt would have read.
+# ---------------------------------------------------------------------------
+
+ALL_FLAGS = frozenset('HNZVC')
+COND_READS = {
+    'HI': 'CZ', 'LS': 'CZ', 'CC': 'C', 'CS': 'C', 'NE': 'Z', 'EQ': 'Z', 'VC': 'V', 'VS': 'V',
+    'PL': 'N', 'MI': 'N', 'GE': 'NV', 'LT': 'NV', 'GT': 'NVZ', 'LE': 'NVZ', 'RA': '', 'RN': ''}
+
+
+def flag_effects(i):
+    """(flags read, flags certainly written) by an instruction."""
+    mn = i.mn
+    base = mn[:-1] if mn[-1] in 'AB' and mn not in ('SUBD', 'ADDD', 'TAB') else mn
+    if mn in ('LBRA', 'LBRN', 'LBSR') or (mn[0] == 'L' and mn[1:] in BRANCHES):
+        mn = mn[1:]
+    if mn in BRANCHES:
+        return frozenset(COND_READS[mn[1:]]), frozenset()
+    table = {
+        'NEG': ('', 'NZVC'), 'COM': ('', 'NZVC'), 'ASL': ('', 'NZVC'), 'ROL': ('C', 'NZVC'),
+        'LSR': ('', 'NZC'), 'ASR': ('', 'NZC'), 'ROR': ('C', 'NZC'),
+        'DEC': ('', 'NZV'), 'INC': ('', 'NZV'), 'TST': ('', 'NZV'), 'CLR': ('', 'NZVC'),
+        'SUB': ('', 'NZVC'), 'CMP': ('', 'NZVC'), 'SBC': ('C', 'NZVC'),
+        'ADD': ('', 'HNZVC'), 'ADC': ('C', 'HNZVC'),
+        'AND': ('', 'NZV'), 'OR': ('', 'NZV'), 'EOR': ('', 'NZV'), 'BIT': ('', 'NZV'),
+        'LD': ('', 'NZV'), 'ST': ('', 'NZV'),
+        'LDD': ('', 'NZV'), 'LDX': ('', 'NZV'), 'LDY': ('', 'NZV'), 'LDU': ('', 'NZV'), 'LDS': ('', 'NZV'),
+        'STD': ('', 'NZV'), 'STX': ('', 'NZV'), 'STY': ('', 'NZV'), 'STU': ('', 'NZV'), 'STS': ('', 'NZV'),
+        'CMPD': ('', 'NZVC'), 'CMPX': ('', 'NZVC'), 'CMPY': ('', 'NZVC'), 'CMPU': ('', 'NZVC'),
+        'CMPS': ('', 'NZVC'), 'SUBD': ('', 'NZVC'), 'ADDD': ('', 'NZVC'),
+        'LEAX': ('', 'Z'), 'LEAY': ('', 'Z'), 'LEAS': ('', ''), 'LEAU': ('', ''),
+        'NOP': ('', ''), 'ABX': ('', ''), 'SEX': ('', 'NZ'), 'MUL': ('', 'ZC'),
+        'JSR': ('', ''), 'JMP': ('', ''), 'RTS': ('', ''),
+    }
+    if base in ('PSHS', 'PSHU'):
+        return (ALL_FLAGS if i.value & 0x01 else frozenset()), frozenset()
+    if base in ('PULS', 'PULU'):
+        return frozenset(), frozenset()
+    if base in ('TFR', 'EXG'):
+        if (i.value >> 4) == 10 or (i.value & 15) == 10:
+            return ALL_FLAGS, frozenset()
+        return frozenset(), frozenset()
+    if base in table:
+        r, w = table[base]
+        return frozenset(r), frozenset(w)
+    return ALL_FLAGS, frozenset()
+
+
+def flag_successors(insns, exit_at, ctx, i):
+    """Instructions that may run next, or None if not all are known."""
+    out = []
+
+    def add(c, t):
+        t &= 0xFFFF
+        if t in exit_at or (c, t) not in insns:
+            return False
+        out.append((c, t))
+        return True
+
+    def add_all(t):
+        cs = ctxs_for(t & 0xFFFF, ctx)
+        return bool(cs) and all([add(c, t) for c in cs])
+
+    mn = i.mn
+    if mn in ('RTS', 'RTI') or (mn in ('JMP', 'JSR') and i.mode != 'ext'):
+        return None
+    if mn in ('PULS', 'PULU') and i.value & 0x80:
+        return None
+    if mn in ('TFR', 'EXG') and ((i.value & 15) == 5 or (mn == 'EXG' and (i.value >> 4) == 5)):
+        return None
+    for t in static_targets(i):
+        if not add_all(t):
+            return None
+    if mn in ('JSR', 'BSR', 'LBSR'):
+        return out      # the return comes back through RTS
+    if not ends_block(i):
+        if region(i.next) != region(i.addr) or not add(ctx, i.next):
+            return None
+    return out
+
+
+def flag_liveness(insns, exit_at):
+    """{(ctx, addr): flags that may be read after the instruction}."""
+    succ = {k: flag_successors(insns, exit_at, k[0], i) for k, i in insns.items()}
+    eff = {k: flag_effects(i) for k, i in insns.items()}
+    preds = {k: [] for k in insns}
+    for k, ss in succ.items():
+        for t in ss or ():
+            preds[t].append(k)
+    live_in = {k: frozenset() for k in insns}
+    live_out = {}
+    work = list(insns)
+    queued = set(work)
+    while work:
+        k = work.pop()
+        queued.discard(k)
+        ss = succ[k]
+        out = ALL_FLAGS if ss is None else frozenset().union(*[live_in[t] for t in ss])
+        live_out[k] = out
+        r, w = eff[k]
+        new = (out - w) | r
+        if new != live_in[k]:
+            live_in[k] = new
+            for p in preds[k]:
+                if p not in queued:
+                    queued.add(p)
+                    work.append(p)
+    return live_out
+
+
+# Code that may read the clock: control transfers and memory accesses that
+# might reach I/O (the stack and the direct page are RAM).
+CLOCKED = re.compile(r"\b(RD|WR|RD16|WR16|return|RC_NEXT|rc_dispatch|rc_spin)\b|C\.PC")
+
+
 def fname(ctx, addr):
     return 'B_%s_%04X' % (ctx, addr)
 
@@ -420,6 +549,8 @@ class Gen:
         self.leaders = leaders
         self.exit_at = exit_at
         self.fold_rom = fold_rom
+        self.hot = set()
+        self.live = flag_liveness(insns, exit_at)
         self.out = []
 
     def emit(self, s):
@@ -436,11 +567,17 @@ class Gen:
             if ea < 0x0800:
                 return 'ir_ram0[0x%04X]' % ea
             return 'RD(0x%04X)' % ea
+        n = dp_offset(ea)
+        if n is not None:
+            return '(C.DP ? RDP(%s) : ir_ram0[0x%02X])' % (ea, n)
         return 'RD(%s)' % ea
 
     def rd16(self, ea):
         if isinstance(ea, int):
             return '(uint16_t)(%s << 8 | %s)' % (self.rd8(ea), self.rd8(ea + 1))
+        n = dp_offset(ea)
+        if n is not None:
+            return '(C.DP ? RDP16(%s) : (uint16_t)(ir_ram0[0x%02X] << 8 | ir_ram0[0x%03X]))' % (ea, n, n + 1)
         return 'RD16(%s)' % ea
 
     def wr8(self, ea, v):
@@ -449,11 +586,18 @@ class Gen:
             if ea < 0x0800:
                 return 'ir_ram0[0x%04X] = %s;' % (ea, v)
             return 'WR(0x%04X, %s);' % (ea, v)
+        n = dp_offset(ea)
+        if n is not None:
+            return 't8 = %s; if (C.DP) WRP(%s, t8); else ir_ram0[0x%02X] = t8;' % (v, ea, n)
         return 'WR(%s, %s);' % (ea, v)
 
     def wr16(self, ea, v):
         if isinstance(ea, int):
             return '%s %s' % (self.wr8(ea, '(uint8_t)((%s) >> 8)' % v), self.wr8(ea + 1, '(uint8_t)(%s)' % v))
+        n = dp_offset(ea)
+        if n is not None:
+            return ('t16b = %s; if (C.DP) WRP16(%s, t16b); else { ir_ram0[0x%02X] = (uint8_t)(t16b >> 8); '
+                    'ir_ram0[0x%03X] = (uint8_t)t16b; }' % (v, ea, n, n + 1))
         return 'WR16(%s, %s);' % (ea, v)
 
     # Effective addresses --------------------------------------------------
@@ -529,99 +673,158 @@ class Gen:
         target &= 0xFFFF
         r = region(target)
         if r == 'F' and ('F', target) in self.leaders and ('F', target) in self.insns:
-            return 'return (void *)%s;' % fname('F', target)
+            return 'RC_NEXT(%s);' % fname('F', target)
         if r == 'B' and ctx != 'F' and (ctx, target) in self.leaders and (ctx, target) in self.insns:
-            return 'return (void *)%s;' % fname(ctx, target)
+            return 'RC_NEXT(%s);' % fname(ctx, target)
         return 'return rc_dispatch(0x%04X);' % target
 
     # Instructions -----------------------------------------------------------
 
-    def insn(self, ctx, i):
+    def flags(self, need, exprs):
+        """Set the flags in `need` from {flag: C expression}."""
+        for f in 'HNZVC':
+            if f in need and f in exprs:
+                self.emit('C.CC_%s = %s;' % (f, exprs[f]))
+
+    def nzv(self, need, v, bits=8):
+        self.flags(need, {'N': '(%s) >> %d' % (v, bits - 1), 'Z': '(%s) == 0' % v, 'V': '0'})
+
+    def arith(self, need, op, d, s, bits=8):
+        """fr = d op s, setting the flags in `need`. Returns nothing: the
+        result is left in fr (unmasked)."""
+        e = self.emit
+        e('fd = %s; fs = %s;' % (d, s))
+        carry = ' + C.CC_C' if op == 'adc' else ' - C.CC_C' if op == 'sbc' else ''
+        e('fr = fd %s fs%s;' % ('+' if op in ('add', 'adc') else '-', carry))
+        top = bits - 1
+        mask = '0x%X' % ((1 << bits) - 1)
+        ex = {'N': '(fr >> %d) & 1' % top, 'Z': '(fr & %s) == 0' % mask, 'C': '(fr >> %d) & 1' % bits}
+        if op in ('add', 'adc'):
+            ex['V'] = '((~(fd ^ fs) & (fd ^ fr)) >> %d) & 1' % top
+            if bits == 8:
+                ex['H'] = '((fd ^ fs ^ fr) >> 4) & 1'
+        else:
+            ex['V'] = '(((fd ^ fs) & (fd ^ fr)) >> %d) & 1' % top
+        self.flags(need, ex)
+
+    def rmw(self, need, op, v):
+        """Emit the 8-bit read-modify-write `op` on v (a C lvalue or t8)."""
+        e = self.emit
+        r = {'NEG': '(uint8_t)-fs', 'COM': '(uint8_t)~fs', 'LSR': 'fs >> 1',
+             'ROR': '(uint8_t)(fs >> 1 | C.CC_C << 7)', 'ASR': '(uint8_t)(fs >> 1 | (fs & 0x80))',
+             'ASL': '(uint8_t)(fs << 1)', 'ROL': '(uint8_t)(fs << 1 | C.CC_C)',
+             'DEC': '(uint8_t)(fs - 1)', 'INC': '(uint8_t)(fs + 1)'}[op]
+        e('fs = %s; fr = %s;' % (v, r))
+        ex = {'N': 'fr >> 7', 'Z': 'fr == 0'}
+        if op == 'LSR':
+            ex['N'] = '0'
+        if op in ('LSR', 'ROR', 'ASR'):
+            ex['C'] = 'fs & 1'
+        elif op in ('ASL', 'ROL'):
+            ex['V'] = '((fs ^ fr) >> 7) & 1'
+            ex['C'] = 'fs >> 7'
+        elif op == 'NEG':
+            ex['V'] = 'fs == 0x80'
+            ex['C'] = 'fs != 0'
+        elif op == 'COM':
+            ex['V'] = '0'
+            ex['C'] = '1'
+        elif op == 'DEC':
+            ex['V'] = 'fs == 0x80'
+        elif op == 'INC':
+            ex['V'] = 'fs == 0x7F'
+        self.flags(need, ex)
+
+    def insn(self, ctx, i, need=ALL_FLAGS):
+        """Emit an instruction, computing only the flags in `need`."""
         mn = i.mn
         e = self.emit
         e('/* %04X: %s */' % (i.addr, self.describe(i)))
-        e('CLK(%d);' % i.cycles)
 
-        rmw = {'NEG': 'rc_neg', 'COM': 'rc_com', 'LSR': 'rc_lsr', 'ROR': 'rc_ror', 'ASR': 'rc_asr',
-               'ASL': 'rc_asl', 'ROL': 'rc_rol', 'DEC': 'rc_dec', 'INC': 'rc_inc'}
-        alu = {'SUB': 'rc_sub', 'SBC': 'rc_sbc', 'AND': 'rc_and', 'EOR': 'rc_eor', 'ADC': 'rc_adc',
-               'OR': 'rc_or', 'ADD': 'rc_add'}
+        rmw = ('NEG', 'COM', 'LSR', 'ROR', 'ASR', 'ASL', 'ROL', 'DEC', 'INC')
+        alu = {'SUB': 'sub', 'SBC': 'sbc', 'ADC': 'adc', 'ADD': 'add'}
+        logic = {'AND': '&', 'EOR': '^', 'OR': '|'}
 
         if mn in rmw and i.mode != 'inh':
             ea = self.ea(i)
-            if isinstance(ea, int):
-                e('t8 = %s;' % self.rd8(ea))
-                e(self.wr8(ea, '%s(t8)' % rmw[mn]))
-            else:
-                e('t8 = RD(%s);' % ea)
-                e('WR(%s, %s(t8));' % (ea, rmw[mn]))
+            self.rmw(need, mn, self.rd8(ea))
+            e(self.wr8(ea, '(uint8_t)fr'))
             return None
         if mn[:-1] in rmw and i.mode == 'inh':
             r = mn[-1]
-            e('C.%s = %s(C.%s);' % (r, rmw[mn[:-1]], r))
+            self.rmw(need, mn[:-1], 'C.' + r)
+            e('C.%s = (uint8_t)fr;' % r)
             return None
         if mn in ('TST', 'TSTA', 'TSTB'):
-            v = 'C.' + mn[-1] if i.mode == 'inh' else self.operand8(i)
-            e('rc_tst(%s);' % v)
+            if i.mode == 'inh':
+                self.nzv(need, 'C.' + mn[-1])
+            else:
+                e('t8 = %s;' % self.operand8(i))
+                self.nzv(need, 't8')
             return None
         if mn in ('CLR', 'CLRA', 'CLRB'):
-            e('C.CC_N = 0; C.CC_Z = 1; C.CC_V = 0; C.CC_C = 0;')
+            self.flags(need, {'N': '0', 'Z': '1', 'V': '0', 'C': '0'})
             if i.mode == 'inh':
                 e('C.%s = 0;' % mn[-1])
             else:
-                ea = self.ea(i)
-                if isinstance(ea, int):
-                    e(self.wr8(ea, '0'))
-                else:
-                    e('WR(%s, 0);' % ea)
+                e(self.wr8(self.ea(i), '0'))
             return None
         if mn[:-1] in alu and mn[-1] in 'AB':
             r = mn[-1]
-            e('C.%s = %s(C.%s, %s);' % (r, alu[mn[:-1]], r, self.operand8(i)))
+            self.arith(need, alu[mn[:-1]], 'C.' + r, self.operand8(i))
+            e('C.%s = (uint8_t)fr;' % r)
+            return None
+        if mn[:-1] in logic and mn[-1] in 'AB':
+            r = mn[-1]
+            e('C.%s = C.%s %s %s;' % (r, r, logic[mn[:-1]], self.operand8(i)))
+            self.nzv(need, 'C.' + r)
             return None
         if mn in ('CMPA', 'CMPB'):
-            e('rc_cmp(C.%s, %s);' % (mn[-1], self.operand8(i)))
+            self.arith(need, 'sub', 'C.' + mn[-1], self.operand8(i))
             return None
         if mn in ('BITA', 'BITB'):
-            e('rc_tst((uint8_t)(C.%s & %s));' % (mn[-1], self.operand8(i)))
+            e('t8 = C.%s & %s;' % (mn[-1], self.operand8(i)))
+            self.nzv(need, 't8')
             return None
         if mn in ('LDA', 'LDB'):
-            e('C.%s = %s; rc_tst(C.%s);' % (mn[-1], self.operand8(i), mn[-1]))
+            e('C.%s = %s;' % (mn[-1], self.operand8(i)))
+            self.nzv(need, 'C.' + mn[-1])
             return None
         if mn in ('STA', 'STB'):
             r = mn[-1]
-            ea = self.ea(i)
-            e(self.wr8(ea, 'C.' + r) if isinstance(ea, int) else 'WR(%s, C.%s);' % (ea, r))
-            e('rc_tst(C.%s);' % r)
+            e(self.wr8(self.ea(i), 'C.' + r))
+            self.nzv(need, 'C.' + r)
             return None
         reg16 = {'D': 'C.D.w', 'X': 'C.X.w', 'Y': 'C.Y.w', 'U': 'C.U.w', 'S': 'C.S.w'}
         if mn in ('LDD', 'LDX', 'LDY', 'LDU', 'LDS'):
             r = reg16[mn[2]]
-            e('%s = %s; rc_tst16(%s);' % (r, self.operand16(i), r))
+            e('%s = %s;' % (r, self.operand16(i)))
+            self.nzv(need, r, 16)
             if mn == 'LDS':
                 e('C.NMI_Armed = 1;')
             return None
         if mn in ('STD', 'STX', 'STY', 'STU', 'STS'):
             r = reg16[mn[2]]
-            ea = self.ea(i)
-            e(self.wr16(ea, r) if isinstance(ea, int) else 'WR16(%s, %s);' % (ea, r))
-            e('rc_tst16(%s);' % r)
+            e(self.wr16(self.ea(i), r))
+            self.nzv(need, r, 16)
             return None
         if mn in ('CMPD', 'CMPX', 'CMPY', 'CMPU', 'CMPS'):
-            e('rc_cmp16(%s, %s);' % (reg16[mn[3]], self.operand16(i)))
+            self.arith(need, 'sub', reg16[mn[3]], self.operand16(i), 16)
             return None
         if mn == 'SUBD':
-            e('C.D.w = rc_sub16(C.D.w, %s);' % self.operand16(i))
+            self.arith(need, 'sub', 'C.D.w', self.operand16(i), 16)
+            e('C.D.w = (uint16_t)fr;')
             return None
         if mn == 'ADDD':
-            e('C.D.w = rc_add16(C.D.w, %s);' % self.operand16(i))
+            self.arith(need, 'add', 'C.D.w', self.operand16(i), 16)
+            e('C.D.w = (uint16_t)fr;')
             return None
         if mn in ('LEAX', 'LEAY', 'LEAS', 'LEAU'):
             ea = self.ea(i)
             r = reg16[mn[3]]
             e('%s = %s;' % (r, '0x%04X' % ea if isinstance(ea, int) else ea))
             if mn in ('LEAX', 'LEAY'):
-                e('C.CC_Z = (%s == 0);' % r)
+                self.flags(need, {'Z': '%s == 0' % r})
             if mn == 'LEAS':
                 e('C.NMI_Armed = 1;')
             return None
@@ -631,13 +834,15 @@ class Gen:
             e('rc_daa();')
             return None
         if mn == 'SEX':
-            e('C.A = (C.B & 0x80) ? 0xFF : 0x00; C.CC_N = (C.D.w >> 15) & 1; C.CC_Z = (C.D.w == 0);')
+            e('C.A = (C.B & 0x80) ? 0xFF : 0x00;')
+            self.flags(need, {'N': 'C.D.w >> 15', 'Z': 'C.D.w == 0'})
             return None
         if mn == 'ABX':
             e('C.X.w = (uint16_t)(C.X.w + C.B);')
             return None
         if mn == 'MUL':
-            e('C.D.w = (uint16_t)(C.A * C.B); C.CC_Z = (C.D.w == 0); C.CC_C = (C.B >> 7) & 1;')
+            e('C.D.w = (uint16_t)(C.A * C.B);')
+            self.flags(need, {'Z': 'C.D.w == 0', 'C': 'C.B >> 7'})
             return None
         if mn == 'ORCC':
             e('rc_set_cc((uint8_t)(rc_get_cc() | 0x%02X));' % i.value)
@@ -695,6 +900,16 @@ class Gen:
             if v & 0x01:
                 return 'exit'
             return None
+        if mn == 'RTI':
+            # Back to the machine loop, which takes any pending interrupt.
+            e('rc_set_cc(PULL8(C.S.w));')
+            e('if (C.CC_E) {')
+            e('CLK(9); C.A = PULL8(C.S.w); C.B = PULL8(C.S.w); C.DP = PULL8(C.S.w);')
+            e('C.X.w = PULL16(C.S.w); C.Y.w = PULL16(C.S.w); C.U.w = PULL16(C.S.w);')
+            e('}')
+            e('C.PC.w = PULL16(C.S.w);')
+            e('return 0;')
+            return 'done'
         if mn == 'RTS':
             e('t16 = PULL16(C.S.w);')
             e('return rc_dispatch(t16);')
@@ -808,9 +1023,10 @@ class Gen:
             ram = None
         else:
             ram = '(C.DP << 8 | 0x%02X) < 0x1000' % load.value
+        e = self.emit
+        e('CLK(%d);' % load.cycles)
         self.insn(ctx, load)
         cond = {'BNE': '!C.CC_Z', 'BEQ': 'C.CC_Z', 'BPL': '!C.CC_N', 'BMI': 'C.CC_N'}[br.mn]
-        e = self.emit
         e('/* %04X: %s (polling loop) */' % (br.addr, self.describe(br)))
         e('CLK(%d);' % br.cycles)
         e('if (%s) {' % cond)
@@ -823,26 +1039,40 @@ class Gen:
 
     def block(self, ctx, addr, single=False):
         e = self.emit
-        e('static void *%s(void)' % fname(ctx, addr))
+        e('%sstatic void *%s(void)' % ('RC_HOT ' if (ctx, addr) in self.hot else '', fname(ctx, addr)))
         e('{')
-        e('uint16_t ea, t16, t16b; uint8_t t8; (void)ea; (void)t16; (void)t16b; (void)t8;')
+        e('uint16_t ea, t16, t16b; uint8_t t8; uint32_t fd, fs, fr;')
+        e('(void)ea; (void)t16; (void)t16b; (void)t8; (void)fd; (void)fs; (void)fr;')
         e('if (OUT_OF_TIME()) { C.PC.w = 0x%04X; return 0; }' % addr)
         if not single and self.spin_block(ctx, addr):
             e('}')
             e('')
             return
+        # The clock is brought up to date only before code that might read
+        # it: a jump, or a memory access that could reach I/O.
+        clk = 0
         a = addr
         first = True
         while True:
             if not first and ((ctx, a) in self.leaders or a in self.exit_at) and not single:
+                e('CLK(%d);' % clk if clk else '')
                 e(self.goto(ctx, a))
                 break
             first = False
             i = self.insns.get((ctx, a))
             if i is None:
+                e('CLK(%d);' % clk if clk else '')
                 e('C.PC.w = 0x%04X; return 0;' % a)
                 break
-            res = self.insn(ctx, i)
+            out, self.out = self.out, []
+            need = ALL_FLAGS if single else self.live.get((ctx, a), ALL_FLAGS)
+            res = self.insn(ctx, i, need)
+            code, self.out = self.out, out
+            clk += i.cycles
+            if res is not None or single or region(i.next) != region(a) or CLOCKED.search(' '.join(code)):
+                e('CLK(%d);' % clk)
+                clk = 0
+            self.out += code
             if res == 'done':
                 break
             if res == 'exit' or single:
@@ -864,14 +1094,18 @@ def write_program(args):
         return image.fixed[a - FIXED_BASE] << 8 | image.fixed[a + 1 - FIXED_BASE]
 
     entries = [('F', vec(v)) for v in (0xFFF2, 0xFFF4, 0xFFF6, 0xFFF8, 0xFFFA, 0xFFFC, 0xFFFE)]
-    if args.hints:
-        for line in open(args.hints):
+    def read_list(path):
+        out = []
+        for line in open(path):
             line = line.split('#')[0].strip()
             if not line:
                 continue
             f = line.split()
-            ctx = 'F' if f[0] == 'F' else int(f[0])
-            entries.append((ctx, int(f[1], 16)))
+            out.append(('F' if f[0] == 'F' else int(f[0]), int(f[1], 16)))
+        return out
+
+    if args.hints:
+        entries += read_list(args.hints)
     exit_at = {int(a, 16) for a in args.exit_at}
 
     insns, leaders = discover(image, entries)
@@ -879,6 +1113,8 @@ def write_program(args):
     # the interpreter: no block starts there, and jumps to them return.
     leaders = {l for l in leaders if l in insns and l[1] not in exit_at}
     g = Gen(image, insns, leaders, exit_at)
+    if args.hot:
+        g.hot = set(read_list(args.hot)) & leaders
     g.emit('// Generated by tools/recomp/recomp.py from the I, Robot ROMs. Do not edit or commit.')
     g.emit('#include "rc_runtime.h"')
     g.emit('')
@@ -954,6 +1190,7 @@ def main():
     ap.add_argument('image', nargs='?')
     ap.add_argument('out')
     ap.add_argument('--hints')
+    ap.add_argument('--hot', help='blocks to mark RC_HOT, in the --hints format')
     ap.add_argument('--exit-at', action='append', default=[])
     ap.add_argument('--selftest', action='store_true')
     ap.add_argument('--seed', type=int, default=1)

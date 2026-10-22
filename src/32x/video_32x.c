@@ -17,10 +17,22 @@ typedef struct
     uint32_t op, arg, used;
 } slave_cmd_t;
 
-static int32_t lists[NUM_LISTS][IR_DLIST_WORDS];
+static ir_dword_t lists[NUM_LISTS][IR_DLIST_WORDS];
+
+// Math box drawing commands run on the slave from a copy of math RAM taken
+// when the game starts them, and draw through their own list.
+// Two copies let the master start the next command while the slave works.
+// Each copy is brought up to date by only the chunks changed since.
+#define MATH_COPIES     3
+#define MATH_LIST_WORDS 2048
+static uint16_t math_copy[MATH_COPIES][0x1000];
+static ir_dword_t math_list[MATH_LIST_WORDS];
+static uint32_t math_used;
+static int math_next;
 
 // Accessed only through UNCACHED().
 static uint32_t list_busy[NUM_LISTS];
+static uint32_t math_busy[MATH_COPIES];
 static slave_cmd_t queue[QUEUE_LEN];
 static uint32_t queue_head, queue_tail;
 
@@ -49,7 +61,7 @@ void ir_video_reset(void)
     palette_dirty = 1;
 }
 
-int32_t *ir_video_submit(int target, int32_t *words, uint32_t used, ir_stats_t *stats)
+ir_dword_t *ir_video_submit(int target, ir_dword_t *words, uint32_t used, ir_stats_t *stats)
 {
     (void)target;   // the slave always draws into the hidden frame buffer
     (void)stats;
@@ -64,6 +76,28 @@ int32_t *ir_video_submit(int target, int32_t *words, uint32_t used, ir_stats_t *
     while (*UNCACHED(&list_busy[next]))
         ;
     return lists[next];
+}
+
+bool ir_video_mathbox(ir_stats_t *stats)
+{
+    if (!ir_mathbox_draws(ir_math_ram[0]))
+        return false;
+    stats->mathbox_commands++;
+    ir_dlist_flush();               // what came before draws first
+    int k = math_next;
+    math_next = (k + 1) % MATH_COPIES;
+    while (*UNCACHED(&math_busy[k]))
+        ;
+    uint8_t bit = (uint8_t)(1 << k);
+    for (int c = 0; c < IR_MATH_CHUNKS; c++)
+        if (ir_math_dirty[c] & bit)
+        {
+            ir_math_dirty[c] &= (uint8_t)~bit;
+            memcpy(&math_copy[k][c * 64], &ir_math_ram[c * 64], 128);
+        }
+    *UNCACHED(&math_busy[k]) = 1;
+    push(SLAVE_MATH, (uint32_t)k, 0);
+    return true;
 }
 
 void ir_video_show(int shown)
@@ -188,31 +222,104 @@ static void erase_alpha(uint8_t *fb, alpha_save_t *save)
     save->cells = 0;
 }
 
+static uint8_t *const fb = (uint8_t *)&MARS_FRAMEBUFFER + FB_FIRST_LINE + FB_X_OFFSET;
+
+// A flip takes effect at the next VBlank. Until then the slave can't draw,
+// but it can go on turning math box commands into a list.
+static bool flip_pending;
+static int flip_fs;
+
+static bool flip_done(void)
+{
+    return (MARS_VDP_FBCTL & MARS_VDP_FS) != flip_fs;
+}
+
+static void finish_flip(void)
+{
+    if (!flip_pending)
+        return;
+    while (!flip_done())
+        sound_service();
+    erase_alpha(fb, &alpha_save[flip_fs ^ 1]);
+    flip_pending = false;
+}
+
+// A display list that came in while a flip was pending (usually just the
+// erase that starts a frame), to draw before the math box list after it.
+static int deferred = -1;
+static uint32_t deferred_used;
+
+static void draw_list(int index, uint32_t used)
+{
+    CacheControl(SH2_CCTL_CP | SH2_CCTL_CE);    // drop stale list data
+    ir_raster_list(fb, FB_LINE_BYTES, lists[index], used, &slave_stats);
+    *UNCACHED(&list_busy[index]) = 0;
+}
+
+// Draw everything waiting, in order.
+static void math_flush(void)
+{
+    finish_flip();
+    if (deferred >= 0)
+    {
+        draw_list(deferred, deferred_used);
+        deferred = -1;
+    }
+    if (math_used)
+        ir_raster_list(fb, FB_LINE_BYTES, math_list, math_used, &slave_stats);
+    math_used = 0;
+}
+
+// Slave: the math box's output, as ir_dlist_add.
+static void math_add(int type, int color, const int32_t *xy, int count)
+{
+    if (math_used + 1 + (uint32_t)count * 2 > MATH_LIST_WORDS)
+        math_flush();
+    math_list[math_used++] = (ir_dword_t)((type << 12) | (count << 6) | (color & 0x3F));
+    for (int n = 0; n < count * 2; n++)
+        math_list[math_used++] = (ir_dword_t)(xy[n] < -32768 ? -32768 : xy[n] > 32767 ? 32767 : xy[n]);
+}
+
 void slave_main_loop(void)
 {
-    uint8_t *fb = (uint8_t *)&MARS_FRAMEBUFFER + FB_FIRST_LINE + FB_X_OFFSET;
     for (;;)
     {
         uint32_t tail = *UNCACHED(&queue_tail);
         while (*UNCACHED(&queue_head) == tail)
+        {
             sound_service();
+            if (flip_pending && flip_done())
+                math_flush();   // also draws anything waiting for it
+        }
         volatile slave_cmd_t *c = UNCACHED(&queue[tail]);
         slave_cmd_t cmd = { c->op, c->arg, c->used };
 
-        if (cmd.op == SLAVE_DRAW)
+        if (cmd.op == SLAVE_MATH)
         {
-            CacheControl(SH2_CCTL_CP | SH2_CCTL_CE);    // drop stale list data
-            ir_raster_list(fb, FB_LINE_BYTES, lists[cmd.arg], cmd.used, &slave_stats);
-            *UNCACHED(&list_busy[cmd.arg]) = 0;
+            // The copy is free once the command has made its list.
+            CacheControl(SH2_CCTL_CP | SH2_CCTL_CE);    // drop stale math RAM
+            ir_mathbox_draw(math_copy[cmd.arg], math_add, &slave_stats);
+            *UNCACHED(&math_busy[cmd.arg]) = 0;
+            if (!flip_pending)
+                math_flush();
         }
-        else if (cmd.op == SLAVE_FLIP)
+        else if (cmd.op == SLAVE_DRAW && flip_pending && deferred < 0 && !math_used)
         {
-            int fs = MARS_VDP_FBCTL & MARS_VDP_FS;
-            draw_alpha(fb, &alpha_save[fs]);
-            MARS_VDP_FBCTL = (uint16_t)(fs ^ 1);
-            while ((MARS_VDP_FBCTL & MARS_VDP_FS) == fs)
-                sound_service();
-            erase_alpha(fb, &alpha_save[fs ^ 1]);
+            deferred = (int)cmd.arg;
+            deferred_used = cmd.used;
+        }
+        else
+        {
+            math_flush();
+            if (cmd.op == SLAVE_DRAW)
+                draw_list((int)cmd.arg, cmd.used);
+            else if (cmd.op == SLAVE_FLIP)
+            {
+                flip_fs = MARS_VDP_FBCTL & MARS_VDP_FS;
+                draw_alpha(fb, &alpha_save[flip_fs]);
+                MARS_VDP_FBCTL = (uint16_t)(flip_fs ^ 1);
+                flip_pending = true;
+            }
         }
         *UNCACHED(&queue_tail) = (tail + 1) & (QUEUE_LEN - 1);
     }

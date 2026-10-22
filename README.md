@@ -5,10 +5,13 @@ A personal, non-commercial port of Atari's *I, Robot* (1983) to the Sega 32X.
 The original 6809 game program runs on the master SH-2, and the math box and
 video processor are replaced by native SH-2 code adapted from John Manfreda's
 [I, Robot Project](https://github.com/manfreda-dot-org/I-Robot-Project) (GPL-3).
-The slave SH-2 rasterizes the polygons into the 32X frame buffer and plays
-the sound of the four POKEY chips through the PWM.
+The slave SH-2 runs the math box's drawing commands, rasterizes the polygons
+into the 32X frame buffer and plays the sound of the four POKEY chips through
+the PWM.
 
 Status: the 32X build plays the game at full speed in PicoDrive, with sound.
+On real hardware, where code in cartridge ROM is much slower, it runs at
+roughly three quarters of full speed in play (from a timing model, below).
 
 ## ROMs
 
@@ -93,11 +96,24 @@ harness with `--recomp --hints FILE` across a few play sessions and merge the
 addresses it prints. `make recomp-selftest` checks every generated instruction
 against the interpreter with random registers and memory.
 
+The generated code computes a condition code flag only where some later
+instruction may read it, following the program's control flow, and brings the
+6809 clock up to date only before code that can observe it. The most-run
+blocks, listed in `tools/recomp/hot.txt` (addresses only), go in the 32X's
+SDRAM, which is much faster than cartridge ROM for code. To refresh the list,
+profile a play session with the timing model below and run
+`tools/recomp/hotlist.py ELF PROFILE 120 > tools/recomp/hot.txt`; the linker
+stops with "SDRAM is full" if it no longer fits.
+
 `tools/retro/stats32x.sh` takes the same arguments as `retro-run` and reports
 how many arcade frames ran per 32X frame. PicoDrive doesn't model ROM wait
-states, so real hardware will be somewhat slower than it reports.
-`tools/retro/prof32x.py` breaks the SH-2 time down by function, given a
-PicoDrive core built with the small profiling change described at its top.
+states, so real hardware will be slower than it reports.
+`tools/retro/picodrive-sh2-timing.patch` adds a profile and a rough
+real-hardware timing model (SH-2 caches, cartridge ROM and SDRAM wait states)
+to PicoDrive's SH-2 interpreter; run the patched core with `RETRO_DRC=disabled
+SH2_TIMING=1`. Its estimate matched real hardware within a few percent.
+`tools/retro/prof32x.py` breaks the SH-2 time down by function from its
+profile.
 
 ## License
 

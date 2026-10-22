@@ -88,6 +88,8 @@ against the interpreter with random registers and memory.
 `tools/retro/stats32x.sh` takes the same arguments as `retro-run` and reports
 how many arcade frames ran per 32X frame. PicoDrive doesn't model ROM wait
 states, so real hardware will be somewhat slower than it reports.
+`tools/retro/prof32x.py` breaks the SH-2 time down by function, given a
+PicoDrive core built with the small profiling change described at its top.
 
 ## License
 

@@ -56,7 +56,7 @@ MARSDEV := third_party/marsdev
 
 SHFLAGS := -m2 -mb -O2 -std=gnu99 -ffreestanding -fomit-frame-pointer \
            -Wall -Wextra -Wno-unused-parameter -Wno-bool-compare -Wno-sign-compare \
-           -DIR_DLIST_EXTERNAL -DIR_DLIST_WORDS=6144
+           -DIR_DLIST_EXTERNAL -DIR_DLIST_WORDS=6144 -DIR_PIXEL_BASE=1
 MDFLAGS := -m68000 -O2 -std=gnu99 -ffreestanding -fomit-frame-pointer -Wall
 
 SH_C    := $(COMMON) $(CPU) src/32x/video_32x.c src/32x/sh_main.c

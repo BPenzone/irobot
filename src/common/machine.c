@@ -272,7 +272,10 @@ static void write_11xx(uint16 addr, uint8 data)
     }
     else
     {
+        bool same_bank = ((out1 ^ data) & 0x0E) == 0;
         out1 = data;
+        if (same_bank)
+            return;
         bank_4000();
         // Recompiled code chains blocks within the bank it started in, so
         // make it come back to the dispatcher after a bank switch.

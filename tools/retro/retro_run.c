@@ -6,8 +6,11 @@
 // Usage: retro-run CORE.so ROM [--frames N] [--snap LIST] [--snap-every N]
 //                  [--out DIR] [--press frame:button[:len],...] [--hash]
 //   buttons: up down left right a b c x y z start mode
-//   --picodrive-dump FILE  after the last frame, save the 32X SDRAM to FILE and
+//   --picodrive-dump FILE  after the last frame, save the 32X SDRAM to FILE,
+//                          both frame buffers to FILE.fb (and the SH-2 profile
+//                          to FILE.prof, see tools/retro/prof32x.py), and
 //                          print both SH-2 PCs (PicoDrive only)
+//   The environment variable RETRO_DRC sets the core's picodrive_drc option.
 
 #include <dlfcn.h>
 #include <stdarg.h>
@@ -34,7 +37,7 @@ static void log_cb(enum retro_log_level level, const char *fmt, ...)
 }
 
 // Core options that differ from what the core assumes when the frontend has none.
-static const struct { const char *key, *value; } options[] = {
+static struct { const char *key, *value; } options[] = {
     { "picodrive_renderer", "accurate" },
     { "picodrive_input1", "6 button pad" },
     { "picodrive_drc", "enabled" },
@@ -189,6 +192,28 @@ static void picodrive_dump(void *core, const char *path)
         fwrite(w, 1, 2, f);
     }
     fclose(f);
+    // Both frame buffers follow the SDRAM and the DRC block maps.
+    char fb_path[1024];
+    snprintf(fb_path, sizeof fb_path, "%s.fb", path);
+    if ((f = fopen(fb_path, "wb")))
+    {
+        for (int n = 0x80000; n < 0xC0000; n += 2)
+        {
+            uint8_t w[2] = { (*mem)[n + 1], (*mem)[n] };
+            fwrite(w, 1, 2, f);
+        }
+        fclose(f);
+    }
+    // A core built with the SH-2 profiling change (see tools/retro/prof32x.py)
+    // keeps cycles per instruction address in sh2_prof; save it beside the dump.
+    const uint32_t *prof = dlsym(core, "sh2_prof");
+    char prof_path[1024];
+    snprintf(prof_path, sizeof prof_path, "%s.prof", path);
+    if (prof && (f = fopen(prof_path, "wb")))
+    {
+        fwrite(prof, 4, 2 * 0x240000, f);
+        fclose(f);
+    }
     for (int i = 0; i < 2; i++)
     {
         const uint8_t *s = sh2s + i * PD_SH2_SIZE;
@@ -212,6 +237,8 @@ int main(int argc, char **argv)
     bool hash = false;
     const char *dump_path = NULL;
 
+    if (getenv("RETRO_DRC"))
+        options[2].value = getenv("RETRO_DRC");
     for (int i = 3; i < argc; i++)
     {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;

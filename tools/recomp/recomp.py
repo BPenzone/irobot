@@ -788,12 +788,49 @@ class Gen:
 
     # Blocks ---------------------------------------------------------------------
 
+    def spin_block(self, ctx, addr):
+        """Emit a polling loop of the form "LDA mem / Bcc addr" that waits for
+        an interrupt handler to change RAM. Nothing else can change the value
+        before the time slice ends, so the remaining iterations are skipped
+        by advancing the clock in whole loop passes. Returns False if the
+        block is not such a loop."""
+        load = self.insns.get((ctx, addr))
+        if not load or load.mn not in ('LDA', 'LDB', 'TST') or load.mode not in ('dir', 'ext'):
+            return False
+        br = self.insns.get((ctx, load.next))
+        if not br or br.mn not in ('BNE', 'BEQ', 'BPL', 'BMI') or (br.value & 0xFFFF) != addr:
+            return False
+        if (ctx, br.next) not in self.insns:
+            return False
+        if load.mode == 'ext':
+            if load.value >= 0x1000:
+                return False
+            ram = None
+        else:
+            ram = '(C.DP << 8 | 0x%02X) < 0x1000' % load.value
+        self.insn(ctx, load)
+        cond = {'BNE': '!C.CC_Z', 'BEQ': 'C.CC_Z', 'BPL': '!C.CC_N', 'BMI': 'C.CC_N'}[br.mn]
+        e = self.emit
+        e('/* %04X: %s (polling loop) */' % (br.addr, self.describe(br)))
+        e('CLK(%d);' % br.cycles)
+        e('if (%s) {' % cond)
+        e('rc_spin(%d);' % (load.cycles + br.cycles) if ram is None else
+          'if (%s) rc_spin(%d);' % (ram, load.cycles + br.cycles))
+        e('return (void *)%s;' % fname(ctx, addr))
+        e('}')
+        e(self.goto(ctx, br.next))
+        return True
+
     def block(self, ctx, addr, single=False):
         e = self.emit
         e('static void *%s(void)' % fname(ctx, addr))
         e('{')
         e('uint16_t ea, t16, t16b; uint8_t t8; (void)ea; (void)t16; (void)t16b; (void)t8;')
         e('if (OUT_OF_TIME()) { C.PC.w = 0x%04X; return 0; }' % addr)
+        if not single and self.spin_block(ctx, addr):
+            e('}')
+            e('')
+            return
         a = addr
         first = True
         while True:

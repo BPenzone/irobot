@@ -128,8 +128,8 @@ static void inputs_for_frame(int frame, ir_inputs_t *in)
         else if (!strcmp(p->button, "start2")) in->start2 = true;
         else if (!strcmp(p->button, "fire"))   in->fire = true;
         else if (!strcmp(p->button, "test"))   in->test = true;
-        else if (!strcmp(p->button, "left"))   in->joy_x = 0x00;
-        else if (!strcmp(p->button, "right"))  in->joy_x = 0xFF;
+        else if (!strcmp(p->button, "left"))   in->joy_x = 0xFF;
+        else if (!strcmp(p->button, "right"))  in->joy_x = 0x00;
         else if (!strcmp(p->button, "up"))     in->joy_y = 0x00;
         else if (!strcmp(p->button, "down"))   in->joy_y = 0xFF;
     }

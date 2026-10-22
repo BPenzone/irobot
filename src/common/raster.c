@@ -13,7 +13,6 @@
 #define W IR_SCREEN_W
 #define H IR_SCREEN_H
 
-static int16_t span_min[H], span_max[H];
 static int pitch;
 
 static inline void plot(uint8_t *bm, int32_t x, int32_t y, uint8_t c)
@@ -81,67 +80,155 @@ static void draw_line(uint8_t *bm, int32_t x0, int32_t y0, int32_t x1, int32_t y
     }
 }
 
-// Record the x extent of one polygon edge on each scanline it crosses.
-// Spans cover pixel centers: scanline y is filled where the edge crosses
-// y + 0.5, so shared edges between adjacent polygons are not drawn twice.
-static void scan_edge(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int *ytop, int *ybot)
+// Polygons are filled the way the 1998 I, Robot emulator does it (after
+// Michael Abrash's fast polygon fill): starting at the top vertex, walk one
+// chain of edges as the left side and the other chain as the right side down
+// to the bottom vertex, appending one x per scanline to each side's list in
+// the order the edges are walked. Edges that run upward add nothing. For a
+// polygon that isn't monotone in y this is not a plain outline fill, and the
+// game relies on that: the lettering on the shield ("REDS") is drawn as such
+// polygons.
+
+static int16_t edge_left[H], edge_right[H];
+
+// Append the x positions of one edge, one per scanline from y0 (skipped if
+// skip_first) to y1 (exclusive), clipped to the screen. Returns the new
+// list length.
+static int scan_edge(int16_t *list, int n, int32_t x0, int32_t y0, int32_t x1, int32_t y1, bool skip_first)
 {
-    if (y0 == y1)
-        return;
-    if (y0 > y1)
+    if (y0 >= H || y1 < 0)
+        return n;
+    int32_t lines_to_skip = 0;
+    if (y0 < 0)
     {
-        int32_t t;
-        t = x0; x0 = x1; x1 = t;
-        t = y0; y0 = y1; y1 = t;
+        lines_to_skip = -y0;
+        skip_first = false;     // the first line is off screen anyway
     }
+    int32_t height = y1 - y0;
+    int32_t lines = (y1 < H ? y1 : H - 1) - (y0 < 0 ? 0 : y0);
+    if (lines <= 0)
+        return n;
 
-    int32_t ys = y0 < 0 ? 0 : y0;
-    int32_t ye = y1 > H ? H : y1;   // exclusive
-    if (ys >= ye)
-        return;
-
-    // x at scanline y = x0 + (y - y0) * dx / dy, in 16.16 fixed point
-    int64_t dx = (int64_t)(x1 - x0) << 16;
-    int64_t step = dx / (y1 - y0);
-    int64_t x = ((int64_t)x0 << 16) + step * (ys - y0) + step / 2;
-
-    if (ys < *ytop) *ytop = ys;
-    if (ye > *ybot) *ybot = ye;
-
-    for (int32_t y = ys; y < ye; y++, x += step)
+    // Bresenham-style stepping: x advances by whole + an error term.
+    int32_t dx = x1 - x0, dir = 1, err = 0;
+    if (dx < 0)
     {
-        int32_t xi = (int32_t)((x + 0x8000) >> 16);
-        if (xi < -1) xi = -1;
-        if (xi > W) xi = W;
-        if (xi < span_min[y]) span_min[y] = (int16_t)xi;
-        if (xi > span_max[y]) span_max[y] = (int16_t)xi;
+        dir = -1;
+        dx = -dx;
+        err = 1 - height;
     }
+    int32_t whole = dx / height, frac = dx % height;
+    int32_t x = x0;
+
+    for (int32_t i = 0; i < lines_to_skip; i++)
+    {
+        x += whole * dir;
+        err += frac;
+        if (err > 0) { x += dir; err -= height; }
+    }
+    for (int32_t i = 0; i < lines; i++)
+    {
+        if (!(i == 0 && skip_first) && n < H)
+            list[n++] = (int16_t)(x < -1 ? -1 : x > W ? W : x);
+        x += whole * dir;
+        err += frac;
+        if (err > 0) { x += dir; err -= height; }
+    }
+    return n;
 }
 
 static void draw_polygon(uint8_t *bm, const int32_t *pts, int count, uint8_t c)
 {
-    int ytop = H, ybot = 0;
-
-    for (int y = 0; y < H; y++)
+#define PX(i) pts[(i) * 2]
+#define PY(i) pts[(i) * 2 + 1]
+#define FWD(i) ((i) + 1 == count ? 0 : (i) + 1)
+#define BACK(i) ((i) == 0 ? count - 1 : (i) - 1)
+    int min_l = 0, max_i = 0;
+    int32_t min_y = PY(0), max_y = PY(0);
+    for (int i = 1; i < count; i++)
     {
-        span_min[y] = W + 1;
-        span_max[y] = -2;
+        if (PY(i) < min_y)
+            min_y = PY(min_l = i);
+        else if (PY(i) > max_y)
+            max_y = PY(max_i = i);
+    }
+    if (min_y == max_y)
+        return;
+
+    // The top may be a flat run of vertices; find both ends of it.
+    int min_r = min_l;
+    while (PY(min_r) == min_y)
+        min_r = FWD(min_r);
+    min_r = BACK(min_r);
+    while (PY(min_l) == min_y)
+        min_l = BACK(min_l);
+    min_l = FWD(min_l);
+
+    // Which way round the vertex list is the left side?
+    int left_dir = -1;
+    bool top_is_flat = PX(min_l) != PX(min_r);
+    if (top_is_flat)
+    {
+        if (PX(min_l) > PX(min_r))
+        {
+            left_dir = 1;
+            int t = min_l; min_l = min_r; min_r = t;
+        }
+    }
+    else
+    {
+        int next = FWD(min_r), prev = BACK(min_l);
+        int64_t dxn = PX(next) - PX(min_l), dyn = PY(next) - PY(min_l);
+        int64_t dxp = PX(prev) - PX(min_l), dyp = PY(prev) - PY(min_l);
+        if (dxn * dyp - dyn * dxp < 0)
+        {
+            left_dir = 1;
+            int t = min_l; min_l = min_r; min_r = t;
+        }
     }
 
-    for (int i = 0; i < count; i++)
+    // A pointed top vertex belongs to the line below it.
+    int32_t y_start = min_y + 1 - top_is_flat;
+    if (y_start < 0)
+        y_start = 0;
+    int32_t length = (max_y < H ? max_y : H) - y_start;
+    if (length <= 0)
+        return;
+
+    int nl = 0, nr = 0;
+    for (int side = 0; side < 2; side++)
     {
-        int j = (i + 1 == count) ? 0 : i + 1;
-        scan_edge(pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1], &ytop, &ybot);
+        int dir = side ? -left_dir : left_dir;
+        int cur = side ? min_r : min_l;
+        bool skip_first = !top_is_flat;
+        int guard = count;
+        do
+        {
+            int next = dir > 0 ? FWD(cur) : BACK(cur);
+            if (side)
+                nr = scan_edge(edge_right, nr, PX(cur), PY(cur), PX(next), PY(next), skip_first);
+            else
+                nl = scan_edge(edge_left, nl, PX(cur), PY(cur), PX(next), PY(next), skip_first);
+            skip_first = false;
+            cur = next;
+        } while (cur != max_i && --guard > 0);
     }
 
-    for (int y = ytop; y < ybot; y++)
+    if (length > nl) length = nl;
+    if (length > nr) length = nr;
+    uint8_t *row = bm + y_start * pitch;
+    for (int i = 0; i < length; i++, row += pitch)
     {
-        int x0 = span_min[y], x1 = span_max[y];
+        int x0 = edge_left[i], x1 = edge_right[i];
         if (x0 < 0) x0 = 0;
-        if (x1 > W) x1 = W;
-        if (x1 > x0)
-            memset(bm + y * pitch + x0, c, (size_t)(x1 - x0));
+        if (x1 > W - 1) x1 = W - 1;
+        if (x1 >= x0)
+            memset(row + x0, c, (size_t)(x1 - x0 + 1));
     }
+#undef PX
+#undef PY
+#undef FWD
+#undef BACK
 }
 
 void ir_raster_list(uint8_t *bm, int bm_pitch, const int32_t *words, uint32_t used, ir_stats_t *stats)
@@ -171,11 +258,11 @@ void ir_raster_list(uint8_t *bm, int bm_pitch, const int32_t *words, uint32_t us
 
         case IR_CMD_VECTOR:
             stats->vectors++;
+            // An open polyline: the math box microcode does not join the
+            // last point back to the first (checked against harness
+            // --reference). The shield lettering depends on it.
             for (int n = 0; n + 1 < count; n++)
                 draw_line(bm, pts[n * 2], pts[n * 2 + 1], pts[n * 2 + 2], pts[n * 2 + 3], color);
-            // a polyline of three or more points is closed
-            if (count > 2)
-                draw_line(bm, pts[count * 2 - 2], pts[count * 2 - 1], pts[0], pts[1], color);
             break;
 
         case IR_CMD_DOT:

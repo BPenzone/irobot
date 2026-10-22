@@ -34,7 +34,13 @@ void ir_video_set_color(int index, uint8_t r, uint8_t g, uint8_t b)
     palette[index] = (uint32_t)(r << 16 | g << 8 | b);
 }
 
-const uint8_t *ir_display_bitmap(void) { return bitmap[shown]; }
+// Set by the harness to show the reference video processor's bitmap instead.
+const uint8_t *(*ir_display_override)(void);
+
+const uint8_t *ir_display_bitmap(void)
+{
+    return ir_display_override ? ir_display_override() : bitmap[shown];
+}
 const uint32_t *ir_bitmap_palette(void) { return palette; }
 
 void ir_compose_rgb(uint32_t *out)

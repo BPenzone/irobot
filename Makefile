@@ -12,9 +12,9 @@ HEADERS := src/common/*.h third_party/mc6809/mc6809.h
 
 all: $(BUILD)/irobot-harness
 
-$(BUILD)/irobot-harness: harness/main.c $(COMMON) src/common/video_soft.c $(CPU) $(HEADERS) $(BUILD)/recomp.o
+$(BUILD)/irobot-harness: harness/main.c harness/reference.c harness/reference.h $(COMMON) src/common/video_soft.c $(CPU) $(HEADERS) $(BUILD)/recomp.o
 	@mkdir -p $(BUILD)/snaps
-	$(CC) $(CFLAGS) -DIR_HINTS -o $@ harness/main.c $(COMMON) src/common/video_soft.c $(CPU) $(BUILD)/recomp.o \
+	$(CC) $(CFLAGS) -DIR_HINTS -o $@ harness/main.c harness/reference.c $(COMMON) src/common/video_soft.c $(CPU) $(BUILD)/recomp.o \
 		-Wno-bool-compare -Wno-sign-compare
 
 # The 6809 program translated to C (from the ROMs, so it stays in build/).

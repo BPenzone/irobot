@@ -30,6 +30,24 @@ EXPECTED = {
     "136029-125": "5b42cc065bfac467028ae883844c8f94465c3666",
 }
 
+# Math box microcode PROMs (SHA-1 from MAME). Only the harness's --reference
+# mode uses them, so they are unpacked when present but not required.
+OPTIONAL = {
+    "136029-111": "33dee2382e1e3899ffbaea859a67af7334270b4a",
+    "136029-112": "4e1ea039e7a3e341796097b0c6943a4805b89f56",
+    "136029-113": "63a3818450a76d230a75f038b140c3934659313e",
+    "136029-114": "34887df0f1ac064b4cf4252a225406e8b30872c6",
+    "136029-115": "46b4495002ddf80668a66a4f85cab99432677b50",
+    "136029-116": "e4caab90910b3aa16c314909f8c02eaf212449a1",
+    "136029-117": "39532fc1b14714396764500a9b1c9e4fed97a970",
+    "136029-118": "163e8e764b400d726c725b6a45901c311e62667e",
+    "136029-119": "964a87c879c953563ca84f8e3c1201302c7b2b91",
+    "136029-120": "35ca23d5bbdc2827afb823a974864b96eb135797",
+    "136029-121": "4628f8af43d82e578833b1452ec747eeb822b4e4",
+    "136029-122": "02398ba6e7c56d961bf92e2755e530db1144219d",
+    "136029-123": "85f338eeff7d8ed58804611bf8446ebb697d196d",
+}
+
 
 def collect(z, found):
     for info in z.infolist():
@@ -41,7 +59,7 @@ def collect(z, found):
             collect(zipfile.ZipFile(io.BytesIO(data)), found)
             continue
         stem = os.path.splitext(name)[0].replace(".", "-")
-        if stem in EXPECTED:
+        if stem in EXPECTED or stem in OPTIONAL:
             found[stem] = data
 
 
@@ -62,6 +80,14 @@ def main():
         if hashlib.sha1(data).hexdigest() != sha:
             print(f"BAD SHA1 {stem}")
             ok = False
+            continue
+        with open(os.path.join(sys.argv[2], stem + ".bin"), "wb") as f:
+            f.write(data)
+        print(f"ok       {stem}")
+    for stem, sha in OPTIONAL.items():
+        data = found.get(stem)
+        if data is None or hashlib.sha1(data).hexdigest() != sha:
+            print(f"skipped  {stem} (optional)")
             continue
         with open(os.path.join(sys.argv[2], stem + ".bin"), "wb") as f:
             f.write(data)

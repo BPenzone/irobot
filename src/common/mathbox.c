@@ -206,7 +206,15 @@ static bool render_primitive(uint16_t addr, uint16_t control)
             color += imin(7, imax(0, (nx * light_x + ny * light_y + nz * light_z) >> 25));
     }
     else
+    {
+        // Without a normal vector the first word is not drawn: the
+        // vertices start with the next word (checked against the math box
+        // microcode with harness --reference; the shield lettering shows it).
+        if (insn & 0x8000)
+            return true;
+        insn = M(addr++ & 0x7FFF);
         fetch_point(insn, &x, &y, &z);
+    }
 
     // Branch-only entries test visibility without drawing.
     if (control & 0x3000)

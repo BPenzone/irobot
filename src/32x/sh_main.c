@@ -21,13 +21,21 @@ static void init_frame_buffers(void)
         ;
     MARS_VDP_DISPMODE = MARS_224_LINES | MARS_VDP_MODE_256;
 
-    // Show 224 of the 232 arcade lines by dropping every 29th one.
+    // Show 224 of the 232 arcade lines. The dropped lines are the bottom
+    // line of eight text rows spread down the screen: that line is blank in
+    // almost every character, so the text stays intact.
+    static const uint8_t dropped_rows[8] = { 2, 5, 9, 13, 16, 20, 24, 27 };
     for (int pass = 0; pass < 2; pass++)
     {
         volatile uint16_t *fb = &MARS_FRAMEBUFFER;
-        for (int y = 0; y < 224; y++)
+        int src = 0, next_drop = 0;
+        for (int y = 0; y < 224; y++, src++)
         {
-            int src = y * IR_SCREEN_H / 224;
+            if (next_drop < 8 && src == dropped_rows[next_drop] * 8 + 7)
+            {
+                src++;
+                next_drop++;
+            }
             fb[y] = (uint16_t)((FB_FIRST_LINE + src * FB_LINE_BYTES) / 2);
         }
         for (int n = 0x100; n < 0x10000; n++)

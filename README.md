@@ -20,6 +20,25 @@ by git); the build reads it and writes generated code to `generated/` (also igno
 - `src/m68k/` Genesis-side 68000 code (boot, input, sound)
 - `docs/` hardware notes
 
+## PC test harness
+
+The harness runs the arcade machine model headless on a PC and writes
+screenshots, so the game logic, math box and rasterizer can be checked before
+anything runs on the 32X.
+
+```sh
+cp /path/to/irobot.zip roms/
+make roms          # unpacks and checks SHA-1s into roms/irobot/
+make
+./build/irobot-harness --frames 3000 --snap-every 300 \
+    --press 400:coin:6,500:start1:6
+```
+
+Screenshots land in `build/snaps/` as PPM files. The command-line options are
+listed at the top of `harness/main.c`; `--text` prints the alphanumeric
+overlay, which is handy for checking game state without looking at images.
+
 ## License
 
-GPL-3.0-or-later, see `LICENSE`.
+GPL-3.0-or-later, see `LICENSE`. The 6809 core in `third_party/mc6809/` is
+LGPL-3.0, see its own `LICENSE.md`.

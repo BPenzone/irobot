@@ -16,6 +16,9 @@
 //   --hash            print a hash of the displayed frame every frame
 //   --text LIST       print the alphanumeric overlay as text on these frames
 //   --recomp          run the recompiled 6809 code where it exists
+//   --reference       run the math box microcode and draw like the video
+//                     processor (harness/reference.c) instead of the
+//                     high-level math box, for comparison
 //   --hints FILE      append (bank, address) of code the recompiler missed to
 //                     FILE, for tools/recomp/recomp.py --hints
 
@@ -24,6 +27,11 @@
 #include <string.h>
 
 #include "../src/common/irobot.h"
+#include "reference.h"
+
+extern void (*ir_ref_math_start)(uint16_t *math_ram, const uint8_t *math_rom_be, uint8_t *comram);
+extern void (*ir_ref_statwr)(uint8_t data, uint8_t *comram);
+extern const uint8_t *(*ir_display_override)(void);
 
 extern FILE *ir_hints_file;    // machine.c, built with IR_HINTS
 
@@ -138,6 +146,7 @@ static void inputs_for_frame(int frame, ir_inputs_t *in)
 int main(int argc, char **argv)
 {
     const char *rom_dir = "roms/irobot";
+    bool reference = false;
     const char *out_dir = "build/snaps";
     int frames = 1200, snap_every = 0;
     bool hash = false;
@@ -158,6 +167,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--double-speed"))    ir_double_speed = true;
         else if (!strcmp(a, "--hash"))            hash = true;
         else if (!strcmp(a, "--recomp"))          ir_use_recompiled = true;
+        else if (!strcmp(a, "--reference"))       reference = true;
         else if (!strcmp(a, "--hints") && v)      { ir_hints_file = fopen(v, "a"); i++; }
         else if (!strcmp(a, "--text") && v)       { text_list = strdup(v); i++; }
         else
@@ -189,6 +199,22 @@ int main(int argc, char **argv)
     };
     static ir_image_t image;
     ir_prepare_image(&roms, &image);
+    if (reference)
+    {
+        static uint8_t proms[13 * 0x400];
+        for (int n = 0; n < 13; n++)
+        {
+            char name[8];
+            snprintf(name, sizeof name, "%d", 111 + n);
+            uint8_t *p = load(rom_dir, name, 0x400);
+            memcpy(&proms[n * 0x400], p, 0x400);
+            free(p);
+        }
+        ref_init(proms);
+        ir_ref_math_start = ref_math_start;
+        ir_ref_statwr = ref_statwr;
+        ir_display_override = ref_display_bitmap;
+    }
     ir_init(&image);
 
     static uint32_t rgb[IR_SCREEN_W * IR_SCREEN_H];

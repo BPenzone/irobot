@@ -218,10 +218,17 @@ static uint8 read_10xx(uint16 addr)
     return ir_dip_3j;
 }
 
+// The PC harness can swap in a reference math box and video processor.
+void (*ir_ref_math_start)(uint16_t *math_ram, const uint8_t *math_rom_be, uint8_t *comram);
+void (*ir_ref_statwr)(uint8_t data, uint8_t *comram);
+
 static void write_statwr(uint8_t data)
 {
     uint8_t changed = statwr ^ data;
     statwr = data;
+
+    if (ir_ref_statwr)
+        ir_ref_statwr(data, &comram[0][0]);
 
     if (changed & STATWR_EXT_COM_SWAP)
         bank_2000();
@@ -248,7 +255,10 @@ static void write_statwr(uint8_t data)
 
     if ((changed & STATWR_MATH_START) && (data & STATWR_MATH_START))
     {
-        ir_mathbox_start(&stats);
+        if (ir_ref_math_start)
+            ir_ref_math_start(ir_math_ram, &image->mathrom_be[0][0], &comram[0][0]);
+        else
+            ir_mathbox_start(&stats);
         ir_cpu.FIRQ = true;
         rc_limit = ir_cpu.Clock;    // leave recompiled code to take it
     }

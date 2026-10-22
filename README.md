@@ -46,6 +46,12 @@ Screenshots land in `build/snaps/` as PPM files. The command-line options are
 listed at the top of `harness/main.c`; `--text` prints the alphanumeric
 overlay, which is handy for checking game state without looking at images.
 
+`--reference` runs the math box microcode from the 136029-111 to -123 PROMs
+and draws its display lists the way the video processor does (ported from
+MAME, in `harness/reference.c`) instead of using the port's high-level math
+box. It is slow, but exact, so screenshots from the two modes show where the
+high-level version differs.
+
 ## 32X build
 
 On Ubuntu 24.04 the toolchains are packaged:

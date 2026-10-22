@@ -27,7 +27,7 @@ static inline uint16_t *ir_math_ptr(uint32_t addr)
 
 // Screen center used by the projection, in native pixels.
 #define IR_XMID (IR_SCREEN_W / 2)
-#define IR_YMID (IR_SCREEN_H / 2 + 6)
+#define IR_YMID 128     // the video processor maps math box y 0 to line 128
 
 // ---------------------------------------------------------------------------
 // Display list

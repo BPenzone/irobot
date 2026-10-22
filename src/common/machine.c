@@ -176,7 +176,6 @@ static void bank_0800(void)
 }
 
 uint8_t ir_prog_bank;
-uint32_t rc_limit;
 
 static void bank_4000(void)
 {
@@ -271,7 +270,7 @@ static void write_statwr(uint8_t data)
         else if (!ir_video_mathbox(&stats))
             ir_mathbox_start(&stats);
         ir_cpu.FIRQ = true;
-        rc_limit = ir_cpu.Clock;    // leave recompiled code to take it
+        ir_cpu.Limit = ir_cpu.Clock;    // leave recompiled code to take it
     }
 
     // EXT_START (active low) asks the video processor to draw the list.
@@ -304,7 +303,7 @@ static void write_11xx(uint16 addr, uint8 data)
         bank_4000();
         // Recompiled code chains blocks within the bank it started in, so
         // make it come back to the dispatcher after a bank switch.
-        rc_limit = ir_cpu.Clock;
+        ir_cpu.Limit = ir_cpu.Clock;
     }
 }
 
@@ -566,7 +565,7 @@ bool ir_run_frame(const ir_inputs_t *inputs)
                 void *b = rc_dispatch(ir_cpu.PC.w);
                 if (b)
                 {
-                    rc_limit = target;
+                    ir_cpu.Limit = target;
                     while ((b = ((rc_block_t)b)()))
                         ;
                     continue;

@@ -35,7 +35,7 @@ PROVIDE (__stack = 0x0603FC00);
 
 SECTIONS {
 	.text 0x02000000 : AT(0x00000000) {
-		*(EXCLUDE_FILE(*machine.o *mathbox.o *pokey.o *sound_32x.o *raster.o *video_32x.o) .text EXCLUDE_FILE(*machine.o *mathbox.o *pokey.o *sound_32x.o *raster.o *video_32x.o) .text.*)
+		*(EXCLUDE_FILE(*machine.o *mathbox.o *pokey.o *sound_32x.o *raster.o *video_32x.o *mathbox_slave.o *libgcc.a:_ashiftrt.o *libgcc.a:_ashiftlt.o *libgcc.a:_lshiftrt.o *libgcc.a:_udivsi3.o *libgcc.a:_sdivsi3.o *libgcc.a:_movmem.o *libc.a:lib_a-memcpy.o *libc.a:lib_a-memset.o) .text EXCLUDE_FILE(*machine.o *mathbox.o *pokey.o *sound_32x.o *raster.o *video_32x.o *mathbox_slave.o *libgcc.a:_ashiftrt.o *libgcc.a:_ashiftlt.o *libgcc.a:_lshiftrt.o *libgcc.a:_udivsi3.o *libgcc.a:_sdivsi3.o *libgcc.a:_movmem.o *libc.a:lib_a-memcpy.o *libc.a:lib_a-memset.o) .text.*)
 		. = ALIGN(0x4);
 
 		__CTOR_LIST__ = .;
@@ -81,6 +81,16 @@ SECTIONS {
 		*sound_32x.o(.text .text.*)
 		*raster.o(.text .text.*)
 		*video_32x.o(.text .text.*)
+		*mathbox_slave.o(.text .text.*)
+		/* Shift, divide and copy helpers that the compiler calls. */
+		*libgcc.a:_ashiftrt.o(.text)
+		*libgcc.a:_ashiftlt.o(.text)
+		*libgcc.a:_lshiftrt.o(.text)
+		*libgcc.a:_udivsi3.o(.text)
+		*libgcc.a:_sdivsi3.o(.text)
+		*libgcc.a:_movmem.o(.text)
+		*libc.a:lib_a-memcpy.o(.text)
+		*libc.a:lib_a-memset.o(.text)
 		*(.rc_hot)
 		_edata = .;
 		. = ALIGN(0x4);

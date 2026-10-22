@@ -24,7 +24,6 @@
 typedef void *(*rc_block_t)(void);
 
 extern mc6809__t ir_cpu;
-extern uint32_t rc_limit;               // run until Clock reaches this
 extern uint8_t ir_prog_bank;            // bank mapped at $4000, 0-5 (or 6-7: none)
 extern const rc_block_t rc_fixed[0xA000];
 extern const rc_block_t rc_banked[6][0x2000];
@@ -52,19 +51,28 @@ extern uint8_t ir_ram0[0x800];          // $0000-$07FF, always mapped
 // the start of every block still ends the chain.
 #ifdef RC_TAILCALL
 #define RC_NEXT(f) return f()
+#define RC_DISPATCH(pc) do { rc_block_t b_ = (rc_block_t)rc_dispatch(pc); return b_ ? b_() : 0; } while (0)
 #else
 #define RC_NEXT(f) return (void *)f
+#define RC_DISPATCH(pc) return rc_dispatch(pc)
 #endif
 
+// The 32X build keeps &ir_cpu in r14 for good (all its SH-2 code is built
+// with -ffixed-r14), which spares every block loading it.
+#ifdef RC_CPU_REG
+register mc6809__t *rc_cpu __asm__("r14");
+#define C (*rc_cpu)
+#else
 #define C ir_cpu
+#endif
 #define CLK(n) (C.Clock += (n))
-#define OUT_OF_TIME() ((int32_t)(C.Clock - rc_limit) >= 0)
+#define OUT_OF_TIME() ((int32_t)(C.Clock - C.Limit) >= 0)
 
 // A polling loop of `n` cycles per pass that can't exit before the time
 // slice ends: run its remaining passes at once.
 RC_FN void rc_spin(uint32_t n)
 {
-    int32_t left = (int32_t)(rc_limit - C.Clock);
+    int32_t left = (int32_t)(C.Limit - C.Clock);
     if (left > 0)
         C.Clock += ((uint32_t)left + n - 1) / n * n;
 }
@@ -86,6 +94,20 @@ RC_FN void WR(uint16_t a, uint8_t v)
         C.WriteFunction[a >> 8](a, v);
 }
 
+// The same with RAM reached inline, for the hot blocks.
+static inline __attribute__((always_inline)) uint8_t RDF(uint16_t a)
+{
+    return a < 0x800 ? ir_ram0[a] : RD(a);
+}
+
+static inline __attribute__((always_inline)) void WRF(uint16_t a, uint8_t v)
+{
+    if (a < 0x800)
+        ir_ram0[a] = v;
+    else
+        WR(a, v);
+}
+
 RC_FN uint16_t RD16(uint16_t a)
 {
     uint8_t hi = RD(a);
@@ -105,22 +127,52 @@ RC_FN void WR16(uint16_t a, uint16_t v)
 #define RDP16 RD16
 #define WRP16 WR16
 
-#define PUSH8(sp, v)  do { sp = (uint16_t)(sp - 1); WR(sp, (v)); } while (0)
-#define PUSH16(sp, v) do { uint16_t v_ = (v); PUSH8(sp, (uint8_t)v_); PUSH8(sp, (uint8_t)(v_ >> 8)); } while (0)
+// The stack is always in RAM in practice: reach it directly when it is.
+RC_FN void rc_push8(uint16_t *sp, uint8_t v)
+{
+    uint16_t a = (uint16_t)(*sp - 1);
+    *sp = a;
+    if (a < 0x800)
+        ir_ram0[a] = v;
+    else
+        WR(a, v);
+}
+
+RC_FN void rc_push16(uint16_t *sp, uint16_t v)
+{
+    uint16_t a = (uint16_t)(*sp - 2);
+    *sp = a;
+    if (a < 0x7FF)
+    {
+        ir_ram0[a] = (uint8_t)(v >> 8);
+        ir_ram0[a + 1] = (uint8_t)v;
+    }
+    else
+    {
+        WR((uint16_t)(a + 1), (uint8_t)v);
+        WR(a, (uint8_t)(v >> 8));
+    }
+}
 
 RC_FN uint8_t rc_pull8(uint16_t *sp)
 {
-    uint8_t v = RD(*sp);
-    *sp = (uint16_t)(*sp + 1);
-    return v;
+    uint16_t a = *sp;
+    *sp = (uint16_t)(a + 1);
+    return a < 0x800 ? ir_ram0[a] : RD(a);
 }
 
 RC_FN uint16_t rc_pull16(uint16_t *sp)
 {
-    uint8_t hi = rc_pull8(sp);
-    return (uint16_t)(hi << 8 | rc_pull8(sp));
+    uint16_t a = *sp;
+    *sp = (uint16_t)(a + 2);
+    if (a < 0x7FF)
+        return (uint16_t)(ir_ram0[a] << 8 | ir_ram0[a + 1]);
+    uint8_t hi = RD(a);
+    return (uint16_t)(hi << 8 | RD((uint16_t)(a + 1)));
 }
 
+#define PUSH8(sp, v)  rc_push8(&(sp), (v))
+#define PUSH16(sp, v) rc_push16(&(sp), (v))
 #define PULL8(sp)  rc_pull8(&(sp))
 #define PULL16(sp) rc_pull16(&(sp))
 

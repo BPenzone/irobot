@@ -541,7 +541,7 @@ def flag_liveness(insns, exit_at):
 
 # Code that may read the clock: control transfers and memory accesses that
 # might reach I/O (the stack and the direct page are RAM).
-CLOCKED = re.compile(r"\b(RD|WR|RD16|WR16|return|RC_NEXT|rc_dispatch|rc_spin)\b|C\.PC")
+CLOCKED = re.compile(r"\b(RD|WR|RDF|WRF|RD16|WR16|return|RC_NEXT|RC_DISPATCH|rc_dispatch|rc_spin)\b|C\.PC")
 
 
 def fname(ctx, addr):
@@ -556,6 +556,7 @@ class Gen:
         self.exit_at = exit_at
         self.fold_rom = fold_rom
         self.hot = set()
+        self.in_hot = False     # emitting a block in self.hot
         self.dp_zero = False    # DP is known to be 0 here
         self.live = flag_liveness(insns, exit_at)
         self.out = []
@@ -579,7 +580,7 @@ class Gen:
             return 'ir_ram0[0x%02X]' % n
         if n is not None:
             return '(C.DP ? RDP(%s) : ir_ram0[0x%02X])' % (ea, n)
-        return 'RD(%s)' % ea
+        return ('RDF(%s)' if self.in_hot else 'RD(%s)') % ea
 
     def rd16(self, ea):
         if isinstance(ea, int):
@@ -602,7 +603,7 @@ class Gen:
             return 'ir_ram0[0x%02X] = %s;' % (n, v)
         if n is not None:
             return 't8 = %s; if (C.DP) WRP(%s, t8); else ir_ram0[0x%02X] = t8;' % (v, ea, n)
-        return 'WR(%s, %s);' % (ea, v)
+        return ('WRF(%s, %s);' if self.in_hot else 'WR(%s, %s);') % (ea, v)
 
     def wr16(self, ea, v):
         if isinstance(ea, int):
@@ -691,7 +692,7 @@ class Gen:
             return 'RC_NEXT(%s);' % fname('F', target)
         if r == 'B' and ctx != 'F' and (ctx, target) in self.leaders and (ctx, target) in self.insns:
             return 'RC_NEXT(%s);' % fname(ctx, target)
-        return 'return rc_dispatch(0x%04X);' % target
+        return 'RC_DISPATCH(0x%04X);' % target
 
     # Instructions -----------------------------------------------------------
 
@@ -910,7 +911,7 @@ class Gen:
                     e('C.NMI_Armed = 1;')
             if v & 0x80:
                 e('t16 = PULL16(%s);' % sp)
-                e('return rc_dispatch(t16);')
+                e('RC_DISPATCH(t16);')
                 return 'done'
             if v & 0x01:
                 return 'exit'
@@ -927,14 +928,14 @@ class Gen:
             return 'done'
         if mn == 'RTS':
             e('t16 = PULL16(C.S.w);')
-            e('return rc_dispatch(t16);')
+            e('RC_DISPATCH(t16);')
             return 'done'
         if mn in ('JSR', 'BSR', 'LBSR'):
             if mn == 'JSR' and i.mode != 'ext':
                 ea = self.ea(i)
                 e('t16 = %s;' % ('0x%04X' % ea if isinstance(ea, int) else ea))
                 e('PUSH16(C.S.w, 0x%04X);' % i.next)
-                e('return rc_dispatch(t16);')
+                e('RC_DISPATCH(t16);')
                 return 'done'
             e('PUSH16(C.S.w, 0x%04X);' % i.next)
             e(self.goto(ctx, i.value))
@@ -944,7 +945,7 @@ class Gen:
                 e(self.goto(ctx, i.value))
             else:
                 ea = self.ea(i)
-                e('return rc_dispatch(%s);' % ('0x%04X' % ea if isinstance(ea, int) else ea))
+                e('RC_DISPATCH(%s);' % ('0x%04X' % ea if isinstance(ea, int) else ea))
             return 'done'
         if mn in ('BRA', 'LBRA'):
             e(self.goto(ctx, i.value))
@@ -994,7 +995,7 @@ class Gen:
             if d == 4:
                 e('C.NMI_Armed = 1;')
         if d == 5 or (i.mn == 'EXG' and s == 5):
-            e('return rc_dispatch(t16);')
+            e('RC_DISPATCH(t16);')
             return 'done'
         if d == 10 or (i.mn == 'EXG' and s == 10):
             return 'exit'
@@ -1069,7 +1070,8 @@ class Gen:
 
     def block(self, ctx, addr, single=False):
         e = self.emit
-        e('%sstatic void *%s(void)' % ('RC_HOT ' if (ctx, addr) in self.hot else '', fname(ctx, addr)))
+        self.in_hot = (ctx, addr) in self.hot
+        e('%sstatic void *%s(void)' % ('RC_HOT ' if self.in_hot else '', fname(ctx, addr)))
         e('{')
         e('uint16_t ea, t16, t16b; uint8_t t8; uint32_t fd, fs, fr;')
         e('(void)ea; (void)t16; (void)t16b; (void)t8; (void)fd; (void)fs; (void)fr;')
@@ -1116,7 +1118,7 @@ class Gen:
                 e('C.PC.w = 0x%04X; return 0;' % i.next)
                 break
             if region(i.next) != region(a):
-                e('return rc_dispatch(0x%04X);' % i.next)
+                e('RC_DISPATCH(0x%04X);' % i.next)
                 break
             a = i.next
         e('}')

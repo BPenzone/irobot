@@ -19,12 +19,18 @@ static int pitch;
 // a byte, and this stays in fast RAM with the rest of the rasterizer.
 static inline void fill(uint8_t *p, uint8_t c, int n)
 {
-    while (n > 0 && ((uintptr_t)p & 3))
+    uint32_t c4 = c * 0x01010101u;
+    if (n >= 1 && ((uintptr_t)p & 1))
     {
         *p++ = c;
         n--;
     }
-    uint32_t c4 = c * 0x01010101u;
+    if (n >= 2 && ((uintptr_t)p & 2))
+    {
+        *(uint16_t *)p = (uint16_t)c4;
+        p += 2;
+        n -= 2;
+    }
     uint32_t *q = (uint32_t *)p;
     for (; n >= 16; n -= 16, q += 4)
     {
@@ -36,8 +42,14 @@ static inline void fill(uint8_t *p, uint8_t c, int n)
     for (; n >= 4; n -= 4)
         *q++ = c4;
     p = (uint8_t *)q;
-    while (n-- > 0)
-        *p++ = c;
+    if (n >= 2)
+    {
+        *(uint16_t *)p = (uint16_t)c4;
+        p += 2;
+        n -= 2;
+    }
+    if (n)
+        *p = c;
 }
 
 static inline void plot(uint8_t *bm, int32_t x, int32_t y, uint8_t c)
@@ -63,7 +75,9 @@ static bool clip_line(int32_t *x0, int32_t *y0, int32_t *x1, int32_t *y1)
                 return false;
             continue;
         }
-        int64_t t = (q[i] << 16) / p[i];
+        // 64-bit division is slow on the SH-2; it is rarely needed.
+        int64_t t = q[i] >= -32768 && q[i] < 32768 && p[i] >= INT32_MIN && p[i] <= INT32_MAX
+                  ? ir_div((int32_t)(q[i] * 65536), (int32_t)p[i]) : (q[i] << 16) / p[i];
         if (p[i] < 0)
         {
             if (t > t1) return false;
@@ -154,15 +168,25 @@ static int scan_edge(int16_t *list, int n, int32_t x0, int32_t y0, int32_t x1, i
         x += (int32_t)(k * (uint32_t)whole + extra) * dir;
         err += (int32_t)(k * (uint32_t)frac - extra * (uint32_t)height);
     }
+    int32_t step = whole * dir;
+    if (skip_first)
+    {
+        x += step;
+        err += frac;
+        if (err > 0) { x += dir; err -= height; }
+        lines--;
+    }
+    if (lines > H - n)
+        lines = H - n;
+    int16_t *out = list + n;
     for (int32_t i = 0; i < lines; i++)
     {
-        if (!(i == 0 && skip_first) && n < H)
-            list[n++] = (int16_t)(x < -1 ? -1 : x > W ? W : x);
-        x += whole * dir;
+        *out++ = (int16_t)(x < -1 ? -1 : x > W ? W : x);
+        x += step;
         err += frac;
         if (err > 0) { x += dir; err -= height; }
     }
-    return n;
+    return n + (lines > 0 ? lines : 0);
 }
 
 static void draw_polygon(uint8_t *bm, const int32_t *pts, int count, uint8_t c)

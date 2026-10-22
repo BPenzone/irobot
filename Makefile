@@ -58,13 +58,13 @@ MARSDEV := third_party/marsdev
 
 SHFLAGS := -m2 -mb -O2 -std=gnu99 -ffreestanding -fomit-frame-pointer \
            -Wall -Wextra -Wno-unused-parameter -Wno-bool-compare -Wno-sign-compare \
-           -DIR_DLIST_EXTERNAL -DIR_DLIST_WORDS=1024 -DIR_PIXEL_BASE=1
+           -DIR_DLIST_EXTERNAL -DIR_DLIST_WORDS=1024 -DIR_PIXEL_BASE=1 -ffixed-r14
 ifdef BENCH
 SHFLAGS += -DIR_BENCH
 endif
 MDFLAGS := -m68000 -O2 -std=gnu99 -ffreestanding -fomit-frame-pointer -Wall
 
-SH_C    := $(COMMON) $(CPU) src/32x/video_32x.c src/32x/sound_32x.c src/32x/sh_main.c
+SH_C    := $(COMMON) $(CPU) src/32x/video_32x.c src/32x/mathbox_slave.c src/32x/sound_32x.c src/32x/sh_main.c
 SH_GEN  := $(B32)/sh/recomp.o
 SH_OBJ  := $(patsubst %.c,$(B32)/sh/%.o,$(SH_C)) $(SH_GEN) $(B32)/sh/mars_start.o $(B32)/sh/image.o
 MD_OBJ  := $(B32)/md/md_start.o $(B32)/md/md_main.o
@@ -92,7 +92,7 @@ $(B32)/poly17.h: tools/poly17.py
 
 $(B32)/sh/recomp.o: $(BUILD)/recomp.c src/common/rc_runtime.h
 	@mkdir -p $(dir $@)
-	$(SHCC) $(filter-out -O2,$(SHFLAGS)) -Os -DRC_HOT_SECTION -DRC_TAILCALL -Isrc/common -c $< -o $@
+	$(SHCC) $(filter-out -O2,$(SHFLAGS)) -Os -DRC_HOT_SECTION -DRC_TAILCALL -DRC_CPU_REG -Isrc/common -c $< -o $@
 
 $(B32)/sh/mars_start.o: $(MARSDEV)/mars_start.s $(B32)/md_start.bin
 	@mkdir -p $(dir $@)

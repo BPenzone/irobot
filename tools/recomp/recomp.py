@@ -541,7 +541,7 @@ def flag_liveness(insns, exit_at):
 
 # Code that may read the clock: control transfers and memory accesses that
 # might reach I/O (the stack and the direct page are RAM).
-CLOCKED = re.compile(r"\b(RD|WR|RDF|WRF|RD16|WR16|return|RC_NEXT|RC_DISPATCH|rc_dispatch|rc_spin)\b|C\.PC")
+CLOCKED = re.compile(r"\b(RD|WR|RDF|WRF|RD16|WR16|RD16F|WR16F|return|RC_NEXT|RC_DISPATCH|rc_dispatch|rc_spin)\b|C\.PC")
 
 
 def fname(ctx, addr):
@@ -590,7 +590,7 @@ class Gen:
             return '(uint16_t)(ir_ram0[0x%02X] << 8 | ir_ram0[0x%03X])' % (n, n + 1)
         if n is not None:
             return '(C.DP ? RDP16(%s) : (uint16_t)(ir_ram0[0x%02X] << 8 | ir_ram0[0x%03X]))' % (ea, n, n + 1)
-        return 'RD16(%s)' % ea
+        return ('RD16F(%s)' if self.in_hot else 'RD16(%s)') % ea
 
     def wr8(self, ea, v):
         if isinstance(ea, int):
@@ -614,7 +614,7 @@ class Gen:
         if n is not None:
             return ('t16b = %s; if (C.DP) WRP16(%s, t16b); else { ir_ram0[0x%02X] = (uint8_t)(t16b >> 8); '
                     'ir_ram0[0x%03X] = (uint8_t)t16b; }' % (v, ea, n, n + 1))
-        return 'WR16(%s, %s);' % (ea, v)
+        return ('WR16F(%s, %s);' if self.in_hot else 'WR16(%s, %s);') % (ea, v)
 
     # Effective addresses --------------------------------------------------
 
@@ -662,7 +662,7 @@ class Gen:
             else:
                 if e != 'ea':
                     self.emit('ea = %s;' % e)
-                self.emit('ea = RD16(ea);')
+                self.emit('ea = %s;' % self.rd16('ea'))
             return 'ea'
         if not isinstance(e, int) and e not in ('ea',):
             self.emit('ea = %s;' % e)
@@ -678,8 +678,6 @@ class Gen:
         if i.mode == 'imm16':
             return '0x%04X' % i.value
         ea = self.ea(i)
-        if not isinstance(ea, int):
-            return 'RD16(%s)' % ea
         return self.rd16(ea)
 
     # Control flow -----------------------------------------------------------

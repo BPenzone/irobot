@@ -144,11 +144,11 @@ uint32_t master_vblank_count(void)
 // into the frame buffer. The pixels under each character are saved so they
 // can be put back before the slave draws into that buffer again; otherwise
 // text would stay behind wherever the game doesn't redraw or erase (the
-// game fills the screen with block characters between scenes). The old
-// pixels go in the unused end of the same frame buffer.
+// game fills the screen with block characters between scenes). What was
+// saved, and the old pixels, go in the unused end of the same frame buffer
+// (which starts out cleared), to leave SDRAM for code.
 #define ALPHA_SAVE_CELLS  ((IR_SCREEN_H / 8) * 32)
 #define ALPHA_SAVE_START  (FB_FIRST_LINE + IR_SCREEN_H * FB_LINE_BYTES)
-#define ALPHA_SAVE_PIXELS (0x20000 - ALPHA_SAVE_START)
 
 typedef struct
 {
@@ -157,7 +157,12 @@ typedef struct
     int cells;
 } alpha_save_t;
 
-static alpha_save_t alpha_save[2];
+#define ALPHA_SAVE_PIXELS (0x20000 - ALPHA_SAVE_START - (int)sizeof(alpha_save_t))
+
+static alpha_save_t *alpha_save(void)
+{
+    return (alpha_save_t *)((uint8_t *)&MARS_FRAMEBUFFER + ALPHA_SAVE_START);
+}
 
 static uint8_t *cell_pixels(uint8_t *fb, int cell)
 {
@@ -166,7 +171,7 @@ static uint8_t *cell_pixels(uint8_t *fb, int cell)
 
 static uint8_t *saved_pixels(void)
 {
-    return (uint8_t *)&MARS_FRAMEBUFFER + ALPHA_SAVE_START;
+    return (uint8_t *)&MARS_FRAMEBUFFER + ALPHA_SAVE_START + sizeof(alpha_save_t);
 }
 
 static void draw_alpha(uint8_t *fb, alpha_save_t *save)
@@ -243,7 +248,7 @@ static void finish_flip(void)
         return;
     while (!flip_done())
         sound_service();
-    erase_alpha(fb, &alpha_save[flip_fs ^ 1]);
+    erase_alpha(fb, alpha_save());
     flip_pending = false;
 }
 
@@ -319,7 +324,7 @@ void slave_main_loop(void)
             else if (cmd.op == SLAVE_FLIP)
             {
                 flip_fs = MARS_VDP_FBCTL & MARS_VDP_FS;
-                draw_alpha(fb, &alpha_save[flip_fs]);
+                draw_alpha(fb, alpha_save());
                 MARS_VDP_FBCTL = (uint16_t)(flip_fs ^ 1);
                 flip_pending = true;
             }

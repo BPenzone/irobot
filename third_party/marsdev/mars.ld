@@ -108,9 +108,10 @@ SECTIONS {
 		end = _end;
 	} > ram
 
-	/* Keep 6 KB below the master's stack (0x0603F000); the code placed in
-	 * SDRAM (tools/recomp/hot.txt) is sized to fit. */
-	ASSERT(_end <= 0x0603D800, "SDRAM is full: shorten tools/recomp/hot.txt")
+	/* Keep 4 KB below the master's stack (0x0603F000), which uses about
+	 * 1.2 KB; the code placed in SDRAM (tools/recomp/hot.txt) is sized to
+	 * fit. */
+	ASSERT(_end <= 0x0603E000, "SDRAM is full: shorten tools/recomp/hot.txt")
 
 	.eh_frame 0 (NOLOAD) :
 	{

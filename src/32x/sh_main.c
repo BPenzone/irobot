@@ -103,7 +103,7 @@ int m_main(void)
 
     // One arcade frame per 32X frame on average. A frame that runs long is
     // made up by starting the next one at once rather than waiting for a
-    // VBlank; more than a few frames behind, the debt is dropped.
+    // VBlank; more than six frames behind, the debt is dropped.
     uint32_t due = master_vblank_count();
     for (;;)
     {
@@ -117,7 +117,7 @@ int m_main(void)
         uint32_t now;
         while ((int32_t)(due - (now = master_vblank_count())) > 0)
             ;
-        if ((int32_t)(now - due) > 3)
+        if ((int32_t)(now - due) > 6)
             due = now;
         stat_vblanks = now;
     }

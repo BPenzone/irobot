@@ -5,3 +5,4 @@ roms/
 generated/
 build/
 *.32x
+*.img

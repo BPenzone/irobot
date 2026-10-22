@@ -180,7 +180,9 @@ int main(int argc, char **argv)
         .r405 = load(rom_dir, "405", 0x4000), .r208 = load(rom_dir, "208", 0x2000),
         .r209 = load(rom_dir, "209", 0x4000), .r210 = load(rom_dir, "210", 0x4000),
     };
-    ir_init(&roms);
+    static ir_image_t image;
+    ir_prepare_image(&roms, &image);
+    ir_init(&image);
 
     static uint32_t rgb[IR_SCREEN_W * IR_SCREEN_H];
     ir_inputs_t in;

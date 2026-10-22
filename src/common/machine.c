@@ -23,8 +23,21 @@ uint8_t ir_dip_3j = 0x00;
 uint8_t ir_dip_5e = 0xFF;
 bool ir_double_speed = false;
 
-uint16_t ir_mathbox_mem[0x8000];
-ir_dlist_t ir_dlist;
+uint16_t ir_math_ram[0x1000];
+const uint16_t *ir_math_rom;
+
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define MATHROM_IS_HOST_ORDER 1
+#else
+static uint16_t math_rom_host[0x6000];
+#endif
+
+// Display list being filled by the math box.
+static int32_t *dlist;
+static uint32_t dlist_used;
+#ifndef IR_DLIST_EXTERNAL
+static int32_t dlist_buffer[IR_DLIST_WORDS];
+#endif
 
 static mc6809__t cpu;
 static ir_stats_t stats;
@@ -34,14 +47,10 @@ static ir_inputs_t in;
 static uint8_t ram_0000[0x800];
 static uint8_t ram_0800[3][0x800];
 static uint8_t comram[2][0x2000];
-static uint8_t mathrom_be[6][0x2000];   // math box ROM as the 6809 sees it
-static uint8_t prog_banked[6][0x2000];
-static uint8_t prog_fixed[0xA000];
 static uint8_t alpha_ram[0x400];
 static uint8_t eeprom[0x100];
-static uint8_t charset[64 * 8];
 static uint32_t alpha_palette[2][4];
-static uint32_t palette[64];
+static const ir_image_t *image;
 
 // Registers
 static uint8_t statwr;      // $1140
@@ -51,8 +60,8 @@ static uint8_t adc_result;
 static int scanline;
 static uint32_t lfsr = 0x1234567;
 
-// Two bitmaps; BUFSEL picks which is drawn into and which is shown.
-static uint8_t bitmap[2][IR_SCREEN_W * IR_SCREEN_H];
+// The video backend keeps two bitmaps; BUFSEL picks which is drawn into and
+// which is shown.
 
 #define STATWR_ERASE        0x01
 #define STATWR_BUFSEL       0x02
@@ -69,19 +78,20 @@ static inline int shown_buffer(void) { return (statwr & STATWR_BUFSEL) ? 1 : 0; 
 
 void ir_dlist_flush(void)
 {
-    ir_raster_list(bitmap[draw_target()], ir_dlist.words, ir_dlist.used, &stats);
-    ir_dlist.used = 0;
+    if (dlist_used)
+        dlist = ir_video_submit(draw_target(), dlist, dlist_used, &stats);
+    dlist_used = 0;
 }
 
 void ir_dlist_add(int type, int color, const int32_t *xy, int count)
 {
     if (count > IR_MAX_POINTS)
         count = IR_MAX_POINTS;
-    if (ir_dlist.used + 1 + (uint32_t)count * 2 > IR_DLIST_WORDS)
+    if (dlist_used + 1 + (uint32_t)count * 2 > IR_DLIST_WORDS)
         ir_dlist_flush();
-    ir_dlist.words[ir_dlist.used++] = (int32_t)((type << 12) | (count << 6) | (color & 0x3F));
+    dlist[dlist_used++] = (int32_t)((type << 12) | (count << 6) | (color & 0x3F));
     for (int n = 0; n < count * 2; n++)
-        ir_dlist.words[ir_dlist.used++] = xy[n];
+        dlist[dlist_used++] = xy[n];
 }
 
 // ---------------------------------------------------------------------------
@@ -122,13 +132,13 @@ static void ignore_write(uint16 addr, uint8 data)
 // Math box RAM is 16-bit; the 6809 sees each word high byte first.
 static uint8 read_mathram(uint16 addr)
 {
-    uint16_t w = ir_mathbox_mem[(addr & 0x1FFF) >> 1];
+    uint16_t w = ir_math_ram[(addr & 0x1FFF) >> 1];
     return (addr & 1) ? (uint8_t)w : (uint8_t)(w >> 8);
 }
 
 static void write_mathram(uint16 addr, uint8 data)
 {
-    uint16_t *w = &ir_mathbox_mem[(addr & 0x1FFF) >> 1];
+    uint16_t *w = &ir_math_ram[(addr & 0x1FFF) >> 1];
     if (addr & 1)
         *w = (uint16_t)((*w & 0xFF00) | data);
     else
@@ -141,7 +151,7 @@ static void bank_2000(void)
     if (!(out0 & 0x10))
     {
         static const uint8_t rom_page[8] = { 0, 1, 0, 1, 2, 3, 4, 5 };
-        map(0x20, 0x3F, mathrom_be[rom_page[(out0 >> 1) & 7]], NULL, NULL, ignore_write);
+        map(0x20, 0x3F, (uint8_t *)image->mathrom_be[rom_page[(out0 >> 1) & 7]], NULL, NULL, ignore_write);
     }
     else if (out0 & 0x08)
         map(0x20, 0x3F, NULL, NULL, read_mathram, write_mathram);
@@ -165,7 +175,7 @@ static void bank_4000(void)
 {
     int bank = (out1 >> 1) & 7;
     if (bank < 6)
-        map(0x40, 0x5F, prog_banked[bank], NULL, NULL, ignore_write);
+        map(0x40, 0x5F, (uint8_t *)image->prog_banked[bank], NULL, NULL, ignore_write);
     else
         map(0x40, 0x5F, NULL, NULL, read_unmapped, write_unmapped);
 }
@@ -219,15 +229,16 @@ static void write_statwr(uint8_t data)
         statwr ^= STATWR_BUFSEL;
         ir_dlist_flush();
         statwr ^= STATWR_BUFSEL;
+        ir_video_show(shown_buffer());
         stats.buffer_flips++;
     }
 
     // ERASE rising edge clears the (new) draw target, queued in order.
     if ((changed & STATWR_ERASE) && (data & STATWR_ERASE))
     {
-        if (ir_dlist.used + 1 > IR_DLIST_WORDS)
+        if (dlist_used + 1 > IR_DLIST_WORDS)
             ir_dlist_flush();
-        ir_dlist.words[ir_dlist.used++] = IR_CMD_ERASE << 12;
+        dlist[dlist_used++] = IR_CMD_ERASE << 12;
     }
 
     if ((changed & STATWR_MATH_START) && (data & STATWR_MATH_START))
@@ -299,7 +310,7 @@ static void write_18xx(uint16 addr, uint8 data)
     int r = 255 * ((data >> 6) & 3) * i / 21;
     int g = 255 * ((data >> 4) & 3) * i / 21;
     int b = 255 * ((data >> 2) & 3) * i / 21;
-    palette[(addr >> 1) & 0x3F] = (uint32_t)(r << 16 | g << 8 | b);
+    ir_video_set_color((addr >> 1) & 0x3F, (uint8_t)r, (uint8_t)g, (uint8_t)b);
 }
 
 static void write_1axx(uint16 addr, uint8 data)
@@ -318,65 +329,23 @@ static void write_1bxx(uint16 addr, uint8 data)
 // Setup
 // ---------------------------------------------------------------------------
 
-// The 2020 emulator replaces the expected math box self-test results in
-// program bank 4 with what the high-level math box produces, then fixes the
-// bank checksum. Without this the self test reports a math box failure.
-static const uint8_t self_test_patch[72] = {
-    0x40,0x00, 0x00,0x00, 0x01,0x21,  0x00,0x00, 0x40,0x00, 0x00,0x00,
-    0xFE,0xE1, 0x00,0x00, 0x40,0x01,  0x40,0x01, 0xFE,0xE1, 0x01,0x21,
-    0x01,0x21, 0x40,0x00, 0x00,0x00,  0xFE,0xE9, 0x00,0x05, 0x40,0x01,
-    0x40,0x01, 0xFE,0xE8, 0x01,0x2C,  0x01,0x21, 0x40,0x01, 0xFE,0xE1,
-    0xFE,0xE9, 0x01,0x22, 0x3F,0xFC,  0x40,0x01, 0x01,0x21, 0xFE,0xE9,
-    0xFE,0xE8, 0x40,0x01, 0x01,0x22,  0x01,0x2C, 0xFE,0xE1, 0x3F,0xFC,
-};
-
-static void patch_self_test(void)
+static void load_image(const ir_image_t *img)
 {
-    memcpy(&prog_banked[4][0x5CAD - 0x4000], self_test_patch, sizeof self_test_patch);
-    uint16_t sum = 0;
-    for (int n = 0; n < 0x1FFE; n += 2)
-        sum = (uint16_t)(sum - (prog_banked[4][n] * 256 + prog_banked[4][n + 1]));
-    for (int n = 0; n < 0x2000; n += 2)
-        sum = (uint16_t)(sum - (prog_banked[5][n] * 256 + prog_banked[5][n + 1]));
-    prog_banked[4][0x1FFE] = (uint8_t)(sum >> 8);
-    prog_banked[4][0x1FFF] = (uint8_t)sum;
-}
+    image = img;
 
-static void load_roms(const ir_roms_t *r)
-{
-    memcpy(prog_banked[0], r->r405, 0x2000);
-    memcpy(prog_banked[1], r->r405 + 0x2000, 0x2000);
-    memcpy(prog_banked[2], r->r206, 0x2000);
-    memcpy(prog_banked[3], r->r206 + 0x2000, 0x2000);
-    memcpy(prog_banked[4], r->r207, 0x2000);
-    memcpy(prog_banked[5], r->r207 + 0x2000, 0x2000);
-    memcpy(prog_fixed + 0x0000, r->r208, 0x2000);
-    memcpy(prog_fixed + 0x2000, r->r209, 0x4000);
-    memcpy(prog_fixed + 0x6000, r->r210, 0x4000);
-    patch_self_test();
-
-    // Math box ROM: 103 (low) / 104 (high) at word 0x2000, 101 / 102 at 0x4000.
-    memset(ir_mathbox_mem, 0, sizeof ir_mathbox_mem);
-    for (int n = 0; n < 0x2000; n++)
-        ir_mathbox_mem[0x2000 + n] = (uint16_t)(r->r104[n] << 8 | r->r103[n]);
-    for (int n = 0; n < 0x4000; n++)
-        ir_mathbox_mem[0x4000 + n] = (uint16_t)(r->r102[n] << 8 | r->r101[n]);
-    for (int bank = 0; bank < 6; bank++)
-        for (int n = 0; n < 0x1000; n++)
-        {
-            uint16_t w = ir_mathbox_mem[0x2000 + bank * 0x1000 + n];
-            mathrom_be[bank][n * 2] = (uint8_t)(w >> 8);
-            mathrom_be[bank][n * 2 + 1] = (uint8_t)w;
-        }
-
-    // Characters: two nibbles per row, high nibble first.
-    for (int n = 0; n < 64 * 8; n++)
-        charset[n] = (uint8_t)((r->r124[n * 2] << 4) | (r->r124[n * 2 + 1] & 0x0F));
+#ifdef MATHROM_IS_HOST_ORDER
+    ir_math_rom = (const uint16_t *)img->mathrom_be;
+#else
+    const uint8_t *m = &img->mathrom_be[0][0];
+    for (int n = 0; n < 0x6000; n++)
+        math_rom_host[n] = (uint16_t)(m[n * 2] << 8 | m[n * 2 + 1]);
+    ir_math_rom = math_rom_host;
+#endif
 
     for (int p = 0; p < 2; p++)
         for (int c = 0; c < 4; c++)
         {
-            uint8_t v = r->r125[p * 16 + c + 4];
+            uint8_t v = img->alpha_prom[p * 16 + c + 4];
             int i = (v & 3) + 1;
             int red = 255 * ((v >> 6) & 3) * i / 12;
             int grn = 255 * ((v >> 4) & 3) * i / 12;
@@ -388,7 +357,7 @@ static void load_roms(const ir_roms_t *r)
         }
 }
 
-void ir_init(const ir_roms_t *roms)
+void ir_init(const ir_image_t *img)
 {
     memset(&stats, 0, sizeof stats);
     memset(&cpu, 0, sizeof cpu);
@@ -396,9 +365,15 @@ void ir_init(const ir_roms_t *roms)
     memset(ram_0800, 0, sizeof ram_0800);
     memset(comram, 0, sizeof comram);
     memset(alpha_ram, 0, sizeof alpha_ram);
-    memset(bitmap, 0, sizeof bitmap);
-    ir_dlist.used = 0;
-    load_roms(roms);
+    memset(ir_math_ram, 0, sizeof ir_math_ram);
+    load_image(img);
+    ir_video_reset();
+#ifdef IR_DLIST_EXTERNAL
+    dlist = ir_video_submit(0, NULL, 0, &stats);
+#else
+    dlist = dlist_buffer;
+#endif
+    dlist_used = 0;
 
     map(0x00, 0xFF, NULL, NULL, read_unmapped, write_unmapped);
     map(0x00, 0x07, ram_0000, ram_0000, NULL, NULL);
@@ -412,7 +387,7 @@ void ir_init(const ir_roms_t *roms)
     map(0x1A, 0x1A, NULL, NULL, read_unmapped, write_1axx);
     map(0x1B, 0x1B, NULL, NULL, read_unmapped, write_1bxx);
     map(0x1C, 0x1F, alpha_ram, alpha_ram, NULL, NULL);
-    map(0x60, 0xFF, prog_fixed, NULL, NULL, ignore_write);
+    map(0x60, 0xFF, (uint8_t *)image->prog_fixed, NULL, NULL, ignore_write);
 
     statwr = 0x00;
     out0 = 0x10;
@@ -470,35 +445,8 @@ bool ir_run_frame(const ir_inputs_t *inputs)
 // Video output
 // ---------------------------------------------------------------------------
 
-const uint8_t *ir_display_bitmap(void) { return bitmap[shown_buffer()]; }
-const uint32_t *ir_bitmap_palette(void) { return palette; }
 const uint8_t *ir_alpha_ram(void) { return alpha_ram; }
-const uint8_t *ir_alpha_charset(void) { return charset; }
-const uint32_t *ir_alpha_palette(void) { return alpha_palette[(out0 & 0x80) ? 1 : 0]; }
+const uint8_t *ir_alpha_charset(void) { return image->charset; }
+int ir_alpha_palette_select(void) { return (out0 & 0x80) ? 1 : 0; }
+const uint32_t *ir_alpha_palette(void) { return alpha_palette[ir_alpha_palette_select()]; }
 const ir_stats_t *ir_stats(void) { return &stats; }
-
-void ir_compose_rgb(uint32_t *out)
-{
-    const uint8_t *bm = ir_display_bitmap();
-    for (int n = 0; n < IR_SCREEN_W * IR_SCREEN_H; n++)
-        out[n] = palette[bm[n] & 0x3F];
-
-    const uint32_t *pal = ir_alpha_palette();
-    for (int row = 0; row < IR_SCREEN_H / 8; row++)
-        for (int col = 0; col < IR_SCREEN_W / 8; col++)
-        {
-            uint8_t v = alpha_ram[row * 32 + col];
-            int ch = v & 0x3F;
-            if (!ch)
-                continue;
-            uint32_t color = pal[v >> 6];
-            for (int y = 0; y < 8; y++)
-            {
-                uint8_t bits = charset[ch * 8 + y];
-                uint32_t *dst = &out[(row * 8 + y) * IR_SCREEN_W + col * 8];
-                for (int x = 0; x < 8; x++)
-                    if (bits & (0x80 >> x))
-                        dst[x] = color;
-            }
-        }
-}

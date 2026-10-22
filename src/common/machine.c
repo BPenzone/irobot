@@ -521,6 +521,13 @@ static void take_irq(void)
     c->PC.w = (uint16_t)(image->prog_fixed[0xFFF8 - 0x6000] << 8 | image->prog_fixed[0xFFF9 - 0x6000]);
 }
 
+void *rc_interpret(void)
+{
+    stats.interpreted++;
+    mc6809_step(&ir_cpu);
+    return rc_dispatch(ir_cpu.PC.w);
+}
+
 bool ir_run_frame(const ir_inputs_t *inputs)
 {
     in = *inputs;

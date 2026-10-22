@@ -410,6 +410,12 @@ def discover(image, entries):
 # C generation
 # ---------------------------------------------------------------------------
 
+def writes_dp(i):
+    if i.mn in ('TFR', 'EXG'):
+        return (i.value & 15) == 11 or (i.mn == 'EXG' and (i.value >> 4) == 11)
+    return i.mn in ('PULS', 'PULU') and bool(i.value & 0x08)
+
+
 def dp_offset(ea):
     """The offset of a direct page address expression from ea(), or None.
     The game runs with DP = 0, where it addresses RAM directly."""
@@ -550,6 +556,7 @@ class Gen:
         self.exit_at = exit_at
         self.fold_rom = fold_rom
         self.hot = set()
+        self.dp_zero = False    # DP is known to be 0 here
         self.live = flag_liveness(insns, exit_at)
         self.out = []
 
@@ -568,6 +575,8 @@ class Gen:
                 return 'ir_ram0[0x%04X]' % ea
             return 'RD(0x%04X)' % ea
         n = dp_offset(ea)
+        if n is not None and self.dp_zero:
+            return 'ir_ram0[0x%02X]' % n
         if n is not None:
             return '(C.DP ? RDP(%s) : ir_ram0[0x%02X])' % (ea, n)
         return 'RD(%s)' % ea
@@ -576,6 +585,8 @@ class Gen:
         if isinstance(ea, int):
             return '(uint16_t)(%s << 8 | %s)' % (self.rd8(ea), self.rd8(ea + 1))
         n = dp_offset(ea)
+        if n is not None and self.dp_zero:
+            return '(uint16_t)(ir_ram0[0x%02X] << 8 | ir_ram0[0x%03X])' % (n, n + 1)
         if n is not None:
             return '(C.DP ? RDP16(%s) : (uint16_t)(ir_ram0[0x%02X] << 8 | ir_ram0[0x%03X]))' % (ea, n, n + 1)
         return 'RD16(%s)' % ea
@@ -587,6 +598,8 @@ class Gen:
                 return 'ir_ram0[0x%04X] = %s;' % (ea, v)
             return 'WR(0x%04X, %s);' % (ea, v)
         n = dp_offset(ea)
+        if n is not None and self.dp_zero:
+            return 'ir_ram0[0x%02X] = %s;' % (n, v)
         if n is not None:
             return 't8 = %s; if (C.DP) WRP(%s, t8); else ir_ram0[0x%02X] = t8;' % (v, ea, n)
         return 'WR(%s, %s);' % (ea, v)
@@ -595,6 +608,8 @@ class Gen:
         if isinstance(ea, int):
             return '%s %s' % (self.wr8(ea, '(uint8_t)((%s) >> 8)' % v), self.wr8(ea + 1, '(uint8_t)(%s)' % v))
         n = dp_offset(ea)
+        if n is not None and self.dp_zero:
+            return 't16b = %s; ir_ram0[0x%02X] = (uint8_t)(t16b >> 8); ir_ram0[0x%03X] = (uint8_t)t16b;' % (v, n, n + 1)
         if n is not None:
             return ('t16b = %s; if (C.DP) WRP16(%s, t16b); else { ir_ram0[0x%02X] = (uint8_t)(t16b >> 8); '
                     'ir_ram0[0x%03X] = (uint8_t)t16b; }' % (v, ea, n, n + 1))
@@ -1037,6 +1052,21 @@ class Gen:
         e(self.goto(ctx, br.next))
         return True
 
+    def uses_dp(self, ctx, addr):
+        """True if the block at addr reads or writes the direct page before
+        anything changes DP. It may look past the end of the block."""
+        a = addr
+        for n in range(64):
+            i = self.insns.get((ctx, a))
+            if i is None or (n and ((ctx, a) in self.leaders or a in self.exit_at)):
+                return False
+            if i.mode == 'dir':
+                return True
+            if writes_dp(i) or ends_block(i):
+                return False
+            a = i.next
+        return False
+
     def block(self, ctx, addr, single=False):
         e = self.emit
         e('%sstatic void *%s(void)' % ('RC_HOT ' if (ctx, addr) in self.hot else '', fname(ctx, addr)))
@@ -1044,6 +1074,11 @@ class Gen:
         e('uint16_t ea, t16, t16b; uint8_t t8; uint32_t fd, fs, fr;')
         e('(void)ea; (void)t16; (void)t16b; (void)t8; (void)fd; (void)fs; (void)fr;')
         e('if (OUT_OF_TIME()) { C.PC.w = 0x%04X; return 0; }' % addr)
+        # A block that uses the direct page checks once that DP is 0, as it
+        # nearly always is, and has the interpreter run it otherwise.
+        self.dp_zero = self.fold_rom and not single and self.uses_dp(ctx, addr)
+        if self.dp_zero:
+            e('if (C.DP) return rc_interpret();')
         if not single and self.spin_block(ctx, addr):
             e('}')
             e('')
@@ -1067,6 +1102,8 @@ class Gen:
             out, self.out = self.out, []
             need = ALL_FLAGS if single else self.live.get((ctx, a), ALL_FLAGS)
             res = self.insn(ctx, i, need)
+            if writes_dp(i):
+                self.dp_zero = False
             code, self.out = self.out, out
             clk += i.cycles
             if res is not None or single or region(i.next) != region(a) or CLOCKED.search(' '.join(code)):

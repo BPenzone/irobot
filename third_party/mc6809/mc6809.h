@@ -85,16 +85,31 @@ typedef union
 
 /************************************************************************/
 
-// variables are organized from largest to smallest
-// this helps improve packing
+// The registers come first: the SH-2 reaches a byte only 15 bytes past a
+// base register, a word 30 and a long 60, so the recompiled code
+// (tools/recomp) addresses them all from one register. Changed from upstream.
 typedef struct
 {
+    WORD D;
+    bool CC_Z;
+    bool CC_N;
+    bool CC_C;
+    bool CC_V;
+    uint8 DP;
+    bool CC_H;
+    WORD Index[4];
+    WORD PC;
+    bool CC_E;
+    bool CC_F;
+    bool CC_I;
+    bool    NMI_Armed;
+    bool    NMI;
+    bool    FIRQ;
+    bool    IRQ;
+    bool    CWAI;
+    bool    SYNC;
+
     uint32  Clock;      // wraps; compare with (int32)(a - b)
-    
-    uint8* ReadPointer[256];
-    uint8* WritePointer[256];
-    pReadFunction ReadFunction[256];
-    pWriteFunction WriteFunction[256];
 
     pPeriodicCallback PeriodicCallback;
     uint32 CallbackCycles;
@@ -102,27 +117,10 @@ typedef struct
 
     MC6809_RESULT Fault;
 
-    WORD PC;
-    WORD Index[4];
-    WORD D;
-
-    uint8 DP;
-
-    bool CC_E;
-    bool CC_F;
-    bool CC_H;
-    bool CC_I;
-    bool CC_N;
-    bool CC_Z;
-    bool CC_V;
-    bool CC_C;
-
-    bool    NMI_Armed;
-    bool    NMI;
-    bool    FIRQ;
-    bool    IRQ;
-    bool    CWAI;
-    bool    SYNC;
+    uint8* ReadPointer[256];
+    uint8* WritePointer[256];
+    pReadFunction ReadFunction[256];
+    pWriteFunction WriteFunction[256];
 } mc6809__t;
 
 #define X       Index[0]

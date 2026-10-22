@@ -15,6 +15,31 @@
 
 static int pitch;
 
+// memset for spans: the 32X frame buffer takes a 32-bit write as quickly as
+// a byte, and this stays in fast RAM with the rest of the rasterizer.
+static inline void fill(uint8_t *p, uint8_t c, int n)
+{
+    while (n > 0 && ((uintptr_t)p & 3))
+    {
+        *p++ = c;
+        n--;
+    }
+    uint32_t c4 = c * 0x01010101u;
+    uint32_t *q = (uint32_t *)p;
+    for (; n >= 16; n -= 16, q += 4)
+    {
+        q[0] = c4;
+        q[1] = c4;
+        q[2] = c4;
+        q[3] = c4;
+    }
+    for (; n >= 4; n -= 4)
+        *q++ = c4;
+    p = (uint8_t *)q;
+    while (n-- > 0)
+        *p++ = c;
+}
+
 static inline void plot(uint8_t *bm, int32_t x, int32_t y, uint8_t c)
 {
     if ((uint32_t)x < W && (uint32_t)y < H)
@@ -117,14 +142,17 @@ static int scan_edge(int16_t *list, int n, int32_t x0, int32_t y0, int32_t x1, i
         dx = -dx;
         err = 1 - height;
     }
-    int32_t whole = dx / height, frac = dx % height;
+    int32_t whole = ir_div(dx, height), frac = dx - whole * height;
     int32_t x = x0;
 
-    for (int32_t i = 0; i < lines_to_skip; i++)
+    if (lines_to_skip)
     {
-        x += whole * dir;
-        err += frac;
-        if (err > 0) { x += dir; err -= height; }
+        // As many steps of the loop below: err gains frac each line and
+        // gives back height, moving x one more, whenever it goes above 0.
+        uint32_t k = (uint32_t)lines_to_skip;
+        uint32_t extra = (k * (uint32_t)frac + (uint32_t)(err + height - 1)) / (uint32_t)height;
+        x += (int32_t)(k * (uint32_t)whole + extra) * dir;
+        err += (int32_t)(k * (uint32_t)frac - extra * (uint32_t)height);
     }
     for (int32_t i = 0; i < lines; i++)
     {
@@ -223,7 +251,7 @@ static void draw_polygon(uint8_t *bm, const int32_t *pts, int count, uint8_t c)
         if (x0 < 0) x0 = 0;
         if (x1 > W - 1) x1 = W - 1;
         if (x1 >= x0)
-            memset(row + x0, c, (size_t)(x1 - x0 + 1));
+            fill(row + x0, c, x1 - x0 + 1);
     }
 #undef PX
 #undef PY
@@ -250,7 +278,7 @@ void ir_raster_list(uint8_t *bm, int bm_pitch, const ir_dword_t *words, uint32_t
         {
         case IR_CMD_ERASE:
             for (int y = 0; y < H; y++)
-                memset(bm + y * pitch, IR_PIXEL_BASE, W);
+                fill(bm + y * pitch, IR_PIXEL_BASE, W);
             break;
 
         case IR_CMD_POLYGON:

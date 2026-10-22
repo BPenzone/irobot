@@ -45,8 +45,8 @@ static void read_inputs(ir_inputs_t *in)
     uint16_t pad = COMM_PAD;
     memset(in, 0, sizeof *in);
     in->joy_x = in->joy_y = 0x80;
-    if (pad & SEGA_CTRL_LEFT)  in->joy_x = 0x00;
-    if (pad & SEGA_CTRL_RIGHT) in->joy_x = 0xFF;
+    if (pad & SEGA_CTRL_LEFT)  in->joy_x = 0xFF;   // the arcade stick reads high to the left
+    if (pad & SEGA_CTRL_RIGHT) in->joy_x = 0x00;
     if (pad & SEGA_CTRL_UP)    in->joy_y = 0x00;
     if (pad & SEGA_CTRL_DOWN)  in->joy_y = 0xFF;
     in->fire = (pad & (SEGA_CTRL_B | SEGA_CTRL_C)) != 0;
@@ -63,7 +63,10 @@ int m_main(void)
     ir_use_recompiled = true;
     ir_init(&ir_rom_image);
 
-    uint32_t last = master_vblank_count();
+    // One arcade frame per 32X frame on average. A frame that runs long is
+    // made up by starting the next one at once rather than waiting for a
+    // VBlank; more than a few frames behind, the debt is dropped.
+    uint32_t due = master_vblank_count();
     for (;;)
     {
         ir_inputs_t in;
@@ -71,11 +74,13 @@ int m_main(void)
         ir_run_frame(&in);
         stat_frames++;
 
-        // At most one arcade frame per 32X frame.
-        while (master_vblank_count() == last)
+        due++;
+        uint32_t now;
+        while ((int32_t)(due - (now = master_vblank_count())) > 0)
             ;
-        last = master_vblank_count();
-        stat_vblanks = last;
+        if ((int32_t)(now - due) > 3)
+            due = now;
+        stat_vblanks = now;
     }
     return 0;
 }

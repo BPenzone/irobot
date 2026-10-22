@@ -40,6 +40,15 @@ extern uint8_t ir_ram0[0x800];          // $0000-$07FF, always mapped
 #define CLK(n) (C.Clock += (n))
 #define OUT_OF_TIME() ((int32_t)(C.Clock - rc_limit) >= 0)
 
+// A polling loop of `n` cycles per pass that can't exit before the time
+// slice ends: run its remaining passes at once.
+static inline void rc_spin(uint32_t n)
+{
+    int32_t left = (int32_t)(rc_limit - C.Clock);
+    if (left > 0)
+        C.Clock += ((uint32_t)left + n - 1) / n * n;
+}
+
 static inline uint8_t RD(uint16_t a)
 {
     const uint8_t *p = C.ReadPointer[a >> 8];

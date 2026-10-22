@@ -48,6 +48,12 @@ enum
     IR_CMD_DOT     = 3,
 };
 
+// Value the rasterizer adds to every pixel it writes. The 32X ignores byte
+// writes of zero to its frame buffer, so its build shifts the palette up one.
+#ifndef IR_PIXEL_BASE
+#define IR_PIXEL_BASE   0
+#endif
+
 #ifndef IR_DLIST_WORDS
 #define IR_DLIST_WORDS  0x10000
 #endif

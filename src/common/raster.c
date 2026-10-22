@@ -153,7 +153,7 @@ void ir_raster_list(uint8_t *bm, int bm_pitch, const int32_t *words, uint32_t us
         uint32_t header = (uint32_t)words[i++];
         int type = (header >> 12) & 0xF;
         int count = (header >> 6) & 0x3F;
-        uint8_t color = header & 0x3F;
+        uint8_t color = (uint8_t)((header & 0x3F) + IR_PIXEL_BASE);
         const int32_t *pts = &words[i];
         i += (uint32_t)count * 2;
 
@@ -161,7 +161,7 @@ void ir_raster_list(uint8_t *bm, int bm_pitch, const int32_t *words, uint32_t us
         {
         case IR_CMD_ERASE:
             for (int y = 0; y < H; y++)
-                memset(bm + y * pitch, 0, W);
+                memset(bm + y * pitch, IR_PIXEL_BASE, W);
             break;
 
         case IR_CMD_POLYGON:

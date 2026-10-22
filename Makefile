@@ -4,7 +4,7 @@ BUILD   := build
 B32     := $(BUILD)/32x
 
 COMMON  := src/common/machine.c src/common/mathbox.c src/common/raster.c \
-           src/common/image.c
+           src/common/image.c src/common/pokey.c
 CPU     := third_party/mc6809/mc6809.c
 HEADERS := src/common/*.h third_party/mc6809/mc6809.h
 
@@ -59,7 +59,7 @@ SHFLAGS := -m2 -mb -O2 -std=gnu99 -ffreestanding -fomit-frame-pointer \
            -DIR_DLIST_EXTERNAL -DIR_DLIST_WORDS=6144 -DIR_PIXEL_BASE=1
 MDFLAGS := -m68000 -O2 -std=gnu99 -ffreestanding -fomit-frame-pointer -Wall
 
-SH_C    := $(COMMON) $(CPU) src/32x/video_32x.c src/32x/sh_main.c
+SH_C    := $(COMMON) $(CPU) src/32x/video_32x.c src/32x/sound_32x.c src/32x/sh_main.c
 SH_GEN  := $(B32)/sh/recomp.o
 SH_OBJ  := $(patsubst %.c,$(B32)/sh/%.o,$(SH_C)) $(SH_GEN) $(B32)/sh/mars_start.o $(B32)/sh/image.o
 MD_OBJ  := $(B32)/md/md_start.o $(B32)/md/md_main.o

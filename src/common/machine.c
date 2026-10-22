@@ -323,6 +323,31 @@ static uint8 read_14xx(uint16 addr)
     return (uint8_t)(lfsr ^ (uint32_t)ir_cpu.Clock);
 }
 
+// POKEY writes, collected for the platform to play back (see irobot.h).
+static ir_sound_write_t sound_writes[IR_SOUND_WRITES_MAX];
+static int sound_write_count;
+static uint32_t frame_start, frame_cycles;
+
+static void write_14xx(uint16 addr, uint8 data)
+{
+    if (sound_write_count < IR_SOUND_WRITES_MAX)
+    {
+        uint32_t t = ir_cpu.Clock - frame_start;
+        ir_sound_write_t *w = &sound_writes[sound_write_count++];
+        w->time = (uint16_t)(t < 0xFFFF ? t : 0xFFFF);
+        w->reg = (uint8_t)(addr & 0x3F);
+        w->data = data;
+    }
+}
+
+const ir_sound_write_t *ir_sound_writes(int *count)
+{
+    *count = sound_write_count;
+    return sound_writes;
+}
+
+uint32_t ir_frame_cycles(void) { return frame_cycles; }
+
 static void write_18xx(uint16 addr, uint8 data)
 {
     // Color RAM: data rrggbbii and address bit 0 are written inverted;
@@ -403,7 +428,7 @@ void ir_init(const ir_image_t *img)
     map(0x11, 0x11, NULL, NULL, read_unmapped, write_11xx);
     map(0x12, 0x12, NULL, NULL, read_12xx, write_12xx);
     map(0x13, 0x13, NULL, NULL, read_13xx, write_unmapped);
-    map(0x14, 0x14, NULL, NULL, read_14xx, ignore_write);    // POKEYs
+    map(0x14, 0x14, NULL, NULL, read_14xx, write_14xx);     // POKEYs
     map(0x18, 0x18, NULL, NULL, read_unmapped, write_18xx);
     map(0x19, 0x19, NULL, NULL, read_unmapped, ignore_write); // watchdog
     map(0x1A, 0x1A, NULL, NULL, read_unmapped, write_1axx);
@@ -464,6 +489,9 @@ bool ir_run_frame(const ir_inputs_t *inputs)
     static uint32_t frac;
     static uint32_t target;
 
+    sound_write_count = 0;
+    frame_start = target;
+
     for (int s = 0; s < IR_SCANLINES / 16; s++)
     {
         frac += slice;
@@ -511,6 +539,7 @@ bool ir_run_frame(const ir_inputs_t *inputs)
             ir_cpu.IRQ = ((scanline - 16) & 0x20) != 0;
     }
 
+    frame_cycles = target - frame_start;
     stats.frames++;
     return true;
 }

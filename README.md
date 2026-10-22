@@ -5,10 +5,10 @@ A personal, non-commercial port of Atari's *I, Robot* (1983) to the Sega 32X.
 The original 6809 game program runs on the master SH-2, and the math box and
 video processor are replaced by native SH-2 code adapted from John Manfreda's
 [I, Robot Project](https://github.com/manfreda-dot-org/I-Robot-Project) (GPL-3).
-The slave SH-2 rasterizes the polygons into the 32X frame buffer.
+The slave SH-2 rasterizes the polygons into the 32X frame buffer and plays
+the sound of the four POKEY chips through the PWM.
 
-Status: the 32X build boots and runs the attract mode in PicoDrive at roughly a
-quarter of full speed. Speed work is next.
+Status: the 32X build plays the game at full speed in PicoDrive, with sound.
 
 ## ROMs
 
@@ -20,7 +20,8 @@ by git); the build reads it and writes everything derived from it to `build/`
 ## Layout
 
 - `src/common/` the arcade machine model shared by both builds: memory map and
-  I/O (`machine.c`), math box (`mathbox.c`), rasterizer (`raster.c`)
+  I/O (`machine.c`), math box (`mathbox.c`), rasterizer (`raster.c`), the
+  POKEY sound chips (`pokey.c`)
 - `src/32x/` 32X-specific code: SH-2 entry points, the video backend that
   splits work between the two SH-2s, and the 68000 side
 - `harness/` PC test harness that runs the machine model headless
@@ -45,6 +46,7 @@ make
 Screenshots land in `build/snaps/` as PPM files. The command-line options are
 listed at the top of `harness/main.c`; `--text` prints the alphanumeric
 overlay, which is handy for checking game state without looking at images.
+`--wav FILE` records the sound.
 
 `--reference` runs the math box microcode from the 136029-111 to -123 PROMs
 and draws its display lists the way the video processor does (ported from
@@ -73,7 +75,7 @@ make build/retro-run
     --frames 900 --snap 300,600,900 --press 400:a,450:start
 ```
 
-Screenshots land in `build/snaps32x/`. On the pad, A inserts a coin, Start
+Screenshots land in `build/snaps32x/`, and `--wav FILE` records the sound. On the pad, A inserts a coin, Start
 starts a one-player game, B and C fire, and the D-pad steers.
 
 ### 6809 recompiler

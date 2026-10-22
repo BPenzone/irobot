@@ -80,6 +80,7 @@ int m_main(void)
         ir_inputs_t in;
         read_inputs(&in);
         ir_run_frame(&in);
+        sound_queue_frame();
         stat_frames++;
 
         due++;
@@ -95,6 +96,7 @@ int m_main(void)
 
 int s_main(void)
 {
+    sound_init_slave();
     slave_main_loop();
     return 0;
 }

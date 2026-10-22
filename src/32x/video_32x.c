@@ -195,7 +195,7 @@ void slave_main_loop(void)
     {
         uint32_t tail = *UNCACHED(&queue_tail);
         while (*UNCACHED(&queue_head) == tail)
-            ;
+            sound_service();
         volatile slave_cmd_t *c = UNCACHED(&queue[tail]);
         slave_cmd_t cmd = { c->op, c->arg, c->used };
 
@@ -211,7 +211,7 @@ void slave_main_loop(void)
             draw_alpha(fb, &alpha_save[fs]);
             MARS_VDP_FBCTL = (uint16_t)(fs ^ 1);
             while ((MARS_VDP_FBCTL & MARS_VDP_FS) == fs)
-                ;
+                sound_service();
             erase_alpha(fb, &alpha_save[fs ^ 1]);
         }
         *UNCACHED(&queue_tail) = (tail + 1) & (QUEUE_LEN - 1);

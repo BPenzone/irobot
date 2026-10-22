@@ -34,4 +34,9 @@ enum
 
 void slave_main_loop(void);
 
+// Sound (sound_32x.c)
+void sound_queue_frame(void);   // master, after each frame
+void sound_init_slave(void);
+void sound_service(void);       // slave, while waiting: render ahead
+
 #endif

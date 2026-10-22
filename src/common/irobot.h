@@ -105,6 +105,21 @@ void ir_compose_rgb(uint32_t *out);
 
 const ir_stats_t *ir_stats(void);
 
+// Writes to the POKEY sound chips during the last ir_run_frame, in order,
+// for the platform to play back with pokey.h.
+typedef struct
+{
+    uint16_t time;      // CPU cycles from the start of the frame
+    uint8_t reg;        // address bits 0-5
+    uint8_t data;
+} ir_sound_write_t;
+
+#define IR_SOUND_WRITES_MAX 512
+const ir_sound_write_t *ir_sound_writes(int *count);
+
+// CPU cycles in the last frame.
+uint32_t ir_frame_cycles(void);
+
 // DIP switches. Defaults match the 2020 emulator: 3J = 0x00, 5E = 0xFF.
 extern uint8_t ir_dip_3j, ir_dip_5e;
 

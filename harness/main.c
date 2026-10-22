@@ -15,12 +15,17 @@
 //   --double-speed    run the 6809 at twice its real clock
 //   --hash            print a hash of the displayed frame every frame
 //   --text LIST       print the alphanumeric overlay as text on these frames
+//   --recomp          run the recompiled 6809 code where it exists
+//   --hints FILE      append (bank, address) of code the recompiler missed to
+//                     FILE, for tools/recomp/recomp.py --hints
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../src/common/irobot.h"
+
+extern FILE *ir_hints_file;    // machine.c, built with IR_HINTS
 
 #define MAX_PRESSES 256
 
@@ -152,6 +157,8 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--dip5e") && v)      { ir_dip_5e = (uint8_t)strtol(v, NULL, 0); i++; }
         else if (!strcmp(a, "--double-speed"))    ir_double_speed = true;
         else if (!strcmp(a, "--hash"))            hash = true;
+        else if (!strcmp(a, "--recomp"))          ir_use_recompiled = true;
+        else if (!strcmp(a, "--hints") && v)      { ir_hints_file = fopen(v, "a"); i++; }
         else if (!strcmp(a, "--text") && v)       { text_list = strdup(v); i++; }
         else
         {
@@ -223,7 +230,11 @@ int main(int argc, char **argv)
            s->frames, s->mathbox_commands, s->objects, s->terrains);
     printf("polygons %u, vectors %u, dots %u, buffer flips %u\n",
            s->polygons, s->vectors, s->dots, s->buffer_flips);
-    printf("unmapped reads %u, unmapped writes %u, CPU faults %u\n",
-           s->unmapped_reads, s->unmapped_writes, s->cpu_faults);
+    printf("unmapped reads %u, unmapped writes %u, CPU faults %u, idle cycles skipped %u\n",
+           s->unmapped_reads, s->unmapped_writes, s->cpu_faults, s->idle_cycles);
+    if (ir_use_recompiled)
+        printf("interpreted instructions %u\n", s->interpreted);
+    if (ir_hints_file)
+        fclose(ir_hints_file);
     return status;
 }

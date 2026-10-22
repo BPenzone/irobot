@@ -89,7 +89,7 @@ typedef union
 // this helps improve packing
 typedef struct
 {
-    uint64  Clock;
+    uint32  Clock;      // wraps; compare with (int32)(a - b)
     
     uint8* ReadPointer[256];
     uint8* WritePointer[256];

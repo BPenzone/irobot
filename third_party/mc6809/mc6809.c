@@ -582,7 +582,7 @@ static uint8 op_sbc(mc6809__t* cpu, uint8 const  dest, uint8 const  src)
     ci = res ^ dest ^ src;
     cpu->CC_N = (res > 0x7F);
     cpu->CC_Z = (res == 0x00);
-    cpu->CC_C = src >= dest;
+    cpu->CC_C = (unsigned)src + cpu->CC_C > dest;   // was src >= dest
     cpu->CC_V = ((ci & 0x80) != 0) ^ cpu->CC_C;
     return res;
 }
@@ -1017,7 +1017,7 @@ static void page2(mc6809__t* cpu)
         break;
 
     case 0xB3: // CMPD
-        cpu->Clock += 6;
+        cpu->Clock += 7;   // was 6
         ea = mc6809_extended(cpu);
         d16.b[MSB] = READ(cpu, ea++);
         d16.b[LSB] = READ(cpu, ea);
@@ -1025,7 +1025,7 @@ static void page2(mc6809__t* cpu)
         break;
 
     case 0xBC: // CMPY
-        cpu->Clock += 6;
+        cpu->Clock += 7;   // was 6
         ea = mc6809_extended(cpu);
         d16.b[MSB] = READ(cpu, ea++);
         d16.b[LSB] = READ(cpu, ea);
@@ -1033,7 +1033,7 @@ static void page2(mc6809__t* cpu)
         break;
 
     case 0xBE: // LDY
-        cpu->Clock += 5;
+        cpu->Clock += 6;   // was 5
         ea = mc6809_extended(cpu);
         cpu->Y.b[MSB] = READ(cpu, ea++);
         cpu->Y.b[LSB] = READ(cpu, ea);
@@ -1041,7 +1041,7 @@ static void page2(mc6809__t* cpu)
         break;
 
     case 0xBF: // STY
-        cpu->Clock += 5;
+        cpu->Clock += 6;   // was 5
         ea = mc6809_extended(cpu);
         WRITE(cpu, ea++, cpu->Y.b[MSB]);
         WRITE(cpu, ea, cpu->Y.b[LSB]);
@@ -1395,7 +1395,7 @@ MC6809_RESULT mc6809_step(mc6809__t* cpu)
         break;
 
     case 0x0E: // JMP
-        cpu->Clock += 3;
+        cpu->Clock += 2;   // was 3
         ea = mc6809_direct(cpu);
         cpu->PC.w = ea;
         break;
@@ -1484,7 +1484,7 @@ MC6809_RESULT mc6809_step(mc6809__t* cpu)
         cpu->A = (cpu->B > 0x7F) ? 0xFF : 0x00;
         cpu->CC_N = (cpu->D.w > 0x7FFF);
         cpu->CC_Z = (cpu->D.w == 0x0000);
-        cpu->CC_V = false;
+        // V is not affected (was cleared)
         break;
 
     case 0x1E: // EXG
@@ -1561,7 +1561,7 @@ MC6809_RESULT mc6809_step(mc6809__t* cpu)
         break;
 
     case 0x1F: // TFR
-        cpu->Clock += 6;
+        cpu->Clock += 5;    // 6 cycles in all (was 7)
         d16.b[LSB] = READ(cpu, cpu->PC.w++);
 
         if ((d16.b[LSB] & 0x88) == 0x00)
@@ -2228,7 +2228,7 @@ MC6809_RESULT mc6809_step(mc6809__t* cpu)
         break;
 
     case 0x6E: // JMP
-        cpu->Clock += 3;
+        cpu->Clock += 2;   // was 3
         ea = mc6809_indexed(cpu);
         cpu->PC.w = ea;
         break;
@@ -2308,7 +2308,7 @@ MC6809_RESULT mc6809_step(mc6809__t* cpu)
         break;
 
     case 0x7E: // JMP
-        cpu->Clock += 4;
+        cpu->Clock += 3;   // was 4
         ea = mc6809_extended(cpu);
         cpu->PC.w = ea;
         break;
@@ -2890,7 +2890,7 @@ MC6809_RESULT mc6809_step(mc6809__t* cpu)
         break;
 
     case 0xDD: // STD
-        cpu->Clock += 6;
+        cpu->Clock += 4;   // was 6
         ea = mc6809_direct(cpu);
         WRITE(cpu, ea++, cpu->A);
         WRITE(cpu, ea, cpu->B);
@@ -2998,7 +2998,7 @@ MC6809_RESULT mc6809_step(mc6809__t* cpu)
         break;
 
     case 0xED: // STD
-        cpu->Clock += 6;
+        cpu->Clock += 4;   // was 6
         ea = mc6809_indexed(cpu);
         WRITE(cpu, ea++, cpu->A);
         WRITE(cpu, ea, cpu->B);
@@ -3106,7 +3106,7 @@ MC6809_RESULT mc6809_step(mc6809__t* cpu)
         break;
 
     case 0xFD: // STD
-        cpu->Clock += 6;
+        cpu->Clock += 5;   // was 6
         ea = mc6809_extended(cpu);
         WRITE(cpu, ea++, cpu->A);
         WRITE(cpu, ea, cpu->B);

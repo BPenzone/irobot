@@ -11,3 +11,8 @@ Changes in this copy:
   big-endian CPUs such as the SH-2.
 - The Windows-only `_cdecl`, `__stdcall` and `__declspec` keywords compile to
   nothing on other platforms.
+- `Clock` is a wrapping `uint32` so the 32X build avoids 64-bit arithmetic.
+- Fixes found by checking against the 6809 datasheet: SBC's carry ignored the
+  incoming carry when the subtraction wrapped; SEX cleared V; and the cycle
+  counts of TFR, JMP (direct, indexed, extended), STD, and the page 2 CMPD,
+  CMPY, LDS and STS instructions were short.

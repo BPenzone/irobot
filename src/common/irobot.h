@@ -71,6 +71,8 @@ typedef struct
     uint32_t buffer_flips;
     uint32_t unmapped_reads, unmapped_writes;
     uint32_t cpu_faults;
+    uint32_t idle_cycles;       // 6809 cycles skipped in the idle loop
+    uint32_t interpreted;       // instructions the recompiled build interpreted
 } ir_stats_t;
 
 // Initialize the machine from a prepared image and perform a cold reset.
@@ -105,6 +107,10 @@ const ir_stats_t *ir_stats(void);
 
 // DIP switches. Defaults match the 2020 emulator: 3J = 0x00, 5E = 0xFF.
 extern uint8_t ir_dip_3j, ir_dip_5e;
+
+// Run the statically recompiled 6809 program (recomp.c) where it covers
+// the code, instead of interpreting everything.
+extern bool ir_use_recompiled;
 
 // Run the 6809 at twice the real clock, as the 2020 emulator does by default.
 extern bool ir_double_speed;

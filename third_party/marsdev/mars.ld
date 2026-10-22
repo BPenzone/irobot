@@ -35,7 +35,7 @@ PROVIDE (__stack = 0x0603FC00);
 
 SECTIONS {
 	.text 0x02000000 : AT(0x00000000) {
-		*(.text .text.*)
+		*(EXCLUDE_FILE(*mc6809.o *machine.o *mathbox.o) .text EXCLUDE_FILE(*mc6809.o *machine.o *mathbox.o) .text.*)
 		. = ALIGN(0x4);
 
 		__CTOR_LIST__ = .;
@@ -75,6 +75,9 @@ SECTIONS {
 		*(.got.plt) *(.got)
 		*(.shdata)
 		*(.data .data.*)
+		*mc6809.o(.text .text.*)
+		*machine.o(.text .text.*)
+		*mathbox.o(.text .text.*)
 		_edata = .;
 		. = ALIGN(0x4);
 	} > ram

@@ -120,6 +120,22 @@ RC_FN void WR16(uint16_t a, uint16_t v)
     WR((uint16_t)(a + 1), (uint8_t)v);
 }
 
+static inline __attribute__((always_inline)) uint16_t RD16F(uint16_t a)
+{
+    return a < 0x7FF ? (uint16_t)(ir_ram0[a] << 8 | ir_ram0[a + 1]) : RD16(a);
+}
+
+static inline __attribute__((always_inline)) void WR16F(uint16_t a, uint16_t v)
+{
+    if (a < 0x7FF)
+    {
+        ir_ram0[a] = (uint8_t)(v >> 8);
+        ir_ram0[a + 1] = (uint8_t)v;
+    }
+    else
+        WR16(a, v);
+}
+
 // Direct page accesses when DP is not 0, which the game never does. Named
 // apart so that recomp.py knows they don't need the clock up to date.
 #define RDP RD

@@ -45,14 +45,18 @@ int main(int argc, char **argv)
     static ir_image_t image;
     ir_prepare_image(&roms, &image);
 
-    // The top entry of the default high score table, which the game
-    // loads whenever its EEPROM is blank (on the 32X, at every power on):
-    // three letters at $8477, A = 1. The first two entries are both DAV.
-    static const uint8_t dav_dav[6] = { 4, 1, 22, 4, 1, 22 }, kap[3] = { 11, 1, 16 };
-    uint8_t *top = &image.prog_fixed[0x8477 - 0x6000];
-    if (!memcmp(top, dav_dav, sizeof dav_dav))
-        memcpy(top, kap, sizeof kap);
-    else
+    // The top of the default high score table, which the game loads
+    // whenever its EEPROM is blank (on the 32X, at every power on): three
+    // letters per entry from $8477, A = 1. Changed only if it holds the
+    // usual DAV, DAV, RUS, PAU.
+    static const char old_names[] = "DAVDAVRUSPAU", new_names[] = "KAPCKPLLPBDP";
+    uint8_t *table = &image.prog_fixed[0x8477 - 0x6000];
+    bool found = true;
+    for (int n = 0; n < 12; n++)
+        found &= table[n] == old_names[n] - 'A' + 1;
+    for (int n = 0; found && n < 12; n++)
+        table[n] = (uint8_t)(new_names[n] - 'A' + 1);
+    if (!found)
         fprintf(stderr, "%s: high score table not found; initials left alone\n", argv[0]);
 
     FILE *f = fopen(argv[2], "wb");

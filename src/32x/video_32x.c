@@ -23,7 +23,7 @@ static ir_dword_t lists[NUM_LISTS][IR_DLIST_WORDS];
 // when the game starts them, and draw through their own list.
 // Two copies let the master start the next command while the slave works.
 // Each copy is brought up to date by only the chunks changed since.
-#define MATH_COPIES     3
+#define MATH_COPIES     4
 #define MATH_LIST_WORDS 2048
 static uint16_t math_copy[MATH_COPIES][0x1000];
 static ir_dword_t math_list[MATH_LIST_WORDS];

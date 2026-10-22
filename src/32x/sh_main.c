@@ -48,6 +48,31 @@ static void init_frame_buffers(void)
     }
 }
 
+#ifdef IR_BENCH
+// Benchmark build (make 32x BENCH=1): a fixed play session, timed in arcade
+// frames rather than read from the pad, so that every build plays exactly
+// the same game however fast it runs. It starts a game, walks the robot
+// around the first levels and fires now and then.
+static const struct { uint16_t frame, length, pad; } bench[] = {
+    { 300, 8, SEGA_CTRL_A }, { 420, 8, SEGA_CTRL_START }, { 700, 30, SEGA_CTRL_RIGHT },
+    { 900, 5, SEGA_CTRL_B }, { 1200, 200, SEGA_CTRL_UP }, { 1450, 20, SEGA_CTRL_LEFT },
+    { 1500, 200, SEGA_CTRL_UP }, { 1750, 5, SEGA_CTRL_B }, { 1800, 300, SEGA_CTRL_UP },
+    { 2150, 20, SEGA_CTRL_RIGHT }, { 2200, 300, SEGA_CTRL_UP }, { 2550, 5, SEGA_CTRL_B },
+    { 2600, 300, SEGA_CTRL_UP },
+};
+
+static uint16_t bench_pad(void)
+{
+    uint16_t pad = 0;
+    for (unsigned i = 0; i < sizeof bench / sizeof bench[0]; i++)
+        if (stat_frames >= bench[i].frame && stat_frames < bench[i].frame + bench[i].length)
+            pad |= bench[i].pad;
+    return pad;
+}
+#undef COMM_PAD
+#define COMM_PAD bench_pad()
+#endif
+
 static void read_inputs(ir_inputs_t *in)
 {
     uint16_t pad = COMM_PAD;

@@ -15,5 +15,6 @@ From the `examples/32x-skeleton` project of
   the offset gcc uses without `-mshort`.
 - `mars.h`, `common.h` register definitions.
 - `mars.ld`, `md.ld` linker scripts. Changed: the hot code (machine, math box,
+  rasterizer, video,
   sound, and the recompiled blocks in the `.rc_hot` section) is placed in
   SDRAM rather than ROM, with a check that it fits.

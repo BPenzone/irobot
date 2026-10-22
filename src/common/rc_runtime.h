@@ -142,6 +142,10 @@ RC_FN void rc_set_cc(uint8_t r)
     C.CC_E = (r >> 7) & 1;
 }
 
+// Run one instruction in the interpreter, then go on from where it left
+// off (machine.c).
+void *rc_interpret(void);
+
 // Control transfer to an address only known at run time.
 #ifdef RC_SELFTEST
 RC_FN void *rc_dispatch(uint16_t pc)

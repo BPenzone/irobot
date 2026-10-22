@@ -11,7 +11,7 @@ the PWM.
 
 Status: the 32X build plays the game at full speed in PicoDrive, with sound.
 On real hardware, where code in cartridge ROM is much slower, it runs at
-roughly three quarters of full speed in play (from a timing model, below).
+roughly 80% of full speed in play (from a timing model, below).
 
 ## ROMs
 
@@ -113,7 +113,9 @@ real-hardware timing model (SH-2 caches, cartridge ROM and SDRAM wait states)
 to PicoDrive's SH-2 interpreter; run the patched core with `RETRO_DRC=disabled
 SH2_TIMING=1`. Its estimate matched real hardware within a few percent.
 `tools/retro/prof32x.py` breaks the SH-2 time down by function from its
-profile.
+profile. `make 32x BENCH=1` builds a benchmark variant that ignores the pad
+and plays a fixed session timed in arcade frames, so that builds of different
+speeds play exactly the same game and can be compared.
 
 ## License
 

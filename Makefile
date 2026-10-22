@@ -59,6 +59,9 @@ MARSDEV := third_party/marsdev
 SHFLAGS := -m2 -mb -O2 -std=gnu99 -ffreestanding -fomit-frame-pointer \
            -Wall -Wextra -Wno-unused-parameter -Wno-bool-compare -Wno-sign-compare \
            -DIR_DLIST_EXTERNAL -DIR_DLIST_WORDS=1024 -DIR_PIXEL_BASE=1
+ifdef BENCH
+SHFLAGS += -DIR_BENCH
+endif
 MDFLAGS := -m68000 -O2 -std=gnu99 -ffreestanding -fomit-frame-pointer -Wall
 
 SH_C    := $(COMMON) $(CPU) src/32x/video_32x.c src/32x/sound_32x.c src/32x/sh_main.c
@@ -79,6 +82,13 @@ $(B32)/irobot.elf: $(SH_OBJ) $(MARSDEV)/mars.ld
 $(B32)/sh/%.o: %.c $(HEADERS) src/32x/shared.h
 	@mkdir -p $(dir $@)
 	$(SHCC) $(SHFLAGS) -c $< -o $@
+
+$(B32)/sh/src/common/pokey.o: SHFLAGS += -I$(B32) -DIR_POLY17_TABLE
+$(B32)/sh/src/common/pokey.o: $(B32)/poly17.h
+
+$(B32)/poly17.h: tools/poly17.py
+	@mkdir -p $(dir $@)
+	python3 tools/poly17.py $@
 
 $(B32)/sh/recomp.o: $(BUILD)/recomp.c src/common/rc_runtime.h
 	@mkdir -p $(dir $@)

@@ -16,3 +16,5 @@ Changes in this copy:
   incoming carry when the subtraction wrapped; SEX cleared V; and the cycle
   counts of TFR, JMP (direct, indexed, extended), STD, and the page 2 CMPD,
   CMPY, LDS and STS instructions were short.
+- The registers come first in `mc6809__t`, ahead of the memory tables, so
+  that the SH-2 can reach them with short displacements from one register.

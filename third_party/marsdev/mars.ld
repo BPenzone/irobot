@@ -35,7 +35,7 @@ PROVIDE (__stack = 0x0603FC00);
 
 SECTIONS {
 	.text 0x02000000 : AT(0x00000000) {
-		*(EXCLUDE_FILE(*machine.o *mathbox.o *pokey.o *sound_32x.o) .text EXCLUDE_FILE(*machine.o *mathbox.o *pokey.o *sound_32x.o) .text.*)
+		*(EXCLUDE_FILE(*machine.o *mathbox.o *pokey.o *sound_32x.o *raster.o *video_32x.o) .text EXCLUDE_FILE(*machine.o *mathbox.o *pokey.o *sound_32x.o *raster.o *video_32x.o) .text.*)
 		. = ALIGN(0x4);
 
 		__CTOR_LIST__ = .;
@@ -79,6 +79,8 @@ SECTIONS {
 		*mathbox.o(.text .text.*)
 		*pokey.o(.text .text.*)
 		*sound_32x.o(.text .text.*)
+		*raster.o(.text .text.*)
+		*video_32x.o(.text .text.*)
 		*(.rc_hot)
 		_edata = .;
 		. = ALIGN(0x4);

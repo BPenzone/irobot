@@ -19,7 +19,6 @@ extern const rc_selftest_t rc_selftests[];
 extern const int rc_selftest_count;
 
 mc6809__t ir_cpu;
-uint32_t rc_limit;
 uint8_t ir_prog_bank;
 uint8_t rc_test_mem[0x10000];
 const rc_block_t rc_fixed[0xA000];
@@ -101,7 +100,7 @@ int main(void)
             // Recompiled
             ir_cpu = start;
             memcpy(rc_test_mem, mem0, sizeof mem0);
-            rc_limit = start.Clock + 1000;
+            ir_cpu.Limit = start.Clock + 1000;
             void *next = t->fn();
             mc6809__t got = ir_cpu;
 

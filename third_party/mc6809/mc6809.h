@@ -110,6 +110,7 @@ typedef struct
     bool    SYNC;
 
     uint32  Clock;      // wraps; compare with (int32)(a - b)
+    uint32  Limit;      // recompiled code runs until Clock reaches this
 
     pPeriodicCallback PeriodicCallback;
     uint32 CallbackCycles;

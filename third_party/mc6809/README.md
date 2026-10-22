@@ -18,3 +18,5 @@ Changes in this copy:
   CMPY, LDS and STS instructions were short.
 - The registers come first in `mc6809__t`, ahead of the memory tables, so
   that the SH-2 can reach them with short displacements from one register.
+- `mc6809__t` has a `Limit` field after `Clock`: the clock value at which
+  recompiled code returns to the machine loop.

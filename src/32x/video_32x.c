@@ -8,6 +8,8 @@
 #include "../common/internal.h"
 #include "shared.h"
 
+void ir_mathbox_draw_slave(const uint16_t *math_ram, void (*out)(int, int, const int32_t *, int), ir_stats_t *stats);
+
 #define NUM_LISTS   3
 #define ALPHA_PEN   (IR_PIXEL_BASE + 64)    // first of the four alphanumeric colors
 #define QUEUE_LEN   16
@@ -82,12 +84,13 @@ bool ir_video_mathbox(ir_stats_t *stats)
 {
     if (!ir_mathbox_draws(ir_math_ram[0]))
         return false;
-    stats->mathbox_commands++;
-    ir_dlist_flush();               // what came before draws first
+    // If the slave is behind, draw it here rather than wait.
     int k = math_next;
+    if (*UNCACHED(&math_busy[k]))
+        return false;
+    stats->mathbox_commands++;
     math_next = (k + 1) % MATH_COPIES;
-    while (*UNCACHED(&math_busy[k]))
-        ;
+    ir_dlist_flush();               // what came before draws first
     uint8_t bit = (uint8_t)(1 << k);
     for (int c = 0; c < IR_MATH_CHUNKS; c++)
         if (ir_math_dirty[c] & bit)
@@ -298,7 +301,7 @@ void slave_main_loop(void)
         {
             // The copy is free once the command has made its list.
             CacheControl(SH2_CCTL_CP | SH2_CCTL_CE);    // drop stale math RAM
-            ir_mathbox_draw(math_copy[cmd.arg], math_add, &slave_stats);
+            ir_mathbox_draw_slave(math_copy[cmd.arg], math_add, &slave_stats);
             *UNCACHED(&math_busy[cmd.arg]) = 0;
             if (!flip_pending)
                 math_flush();

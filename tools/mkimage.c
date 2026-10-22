@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "../src/common/irobot.h"
 
@@ -43,6 +44,16 @@ int main(int argc, char **argv)
     };
     static ir_image_t image;
     ir_prepare_image(&roms, &image);
+
+    // The top entry of the default high score table, which the game
+    // loads whenever its EEPROM is blank (on the 32X, at every power on):
+    // three letters at $8477, A = 1. The first two entries are both DAV.
+    static const uint8_t dav_dav[6] = { 4, 1, 22, 4, 1, 22 }, kap[3] = { 11, 1, 16 };
+    uint8_t *top = &image.prog_fixed[0x8477 - 0x6000];
+    if (!memcmp(top, dav_dav, sizeof dav_dav))
+        memcpy(top, kap, sizeof kap);
+    else
+        fprintf(stderr, "%s: high score table not found; initials left alone\n", argv[0]);
 
     FILE *f = fopen(argv[2], "wb");
     if (!f || fwrite(&image, sizeof image, 1, f) != 1 || fclose(f))

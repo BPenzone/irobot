@@ -75,11 +75,12 @@ and use the runner:
 ```sh
 make build/retro-run
 ./build/retro-run path/to/picodrive_libretro.so build/irobot.32x \
-    --frames 900 --snap 300,600,900 --press 400:a,450:start
+    --frames 900 --snap 300,600,900 --press 400:start,450:a
 ```
 
-Screenshots land in `build/snaps32x/`, and `--wav FILE` records the sound. On the pad, A inserts a coin, Start
-starts a one-player game, B and C fire, and the D-pad steers.
+Screenshots land in `build/snaps32x/`, and `--wav FILE` records the sound. On the pad, Start inserts a coin, A
+starts a one-player game (and turns the view down in play), C starts a two-player game (view up), B
+fires, and the D-pad steers.
 
 ### 6809 recompiler
 

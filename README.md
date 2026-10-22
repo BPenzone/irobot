@@ -70,6 +70,25 @@ make build/retro-run
 Screenshots land in `build/snaps32x/`. On the pad, A inserts a coin, Start
 starts a one-player game, B and C fire, and the D-pad steers.
 
+### 6809 recompiler
+
+The 32X can't interpret the 6809 fast enough, so the build translates the
+program ROM into C ahead of time. `tools/recomp/recomp.py` reads the ROM image,
+follows the code from the reset and interrupt vectors, and writes one C
+function per basic block (`build/32x/recomp.c`, which is generated from your
+ROMs and never committed). Anything it can't reach statically falls back to the
+interpreter at run time.
+
+Code that is only reached through computed jumps is listed in
+`tools/recomp/hints.txt` (addresses only, no ROM data). To refresh it, run the
+harness with `--recomp --hints FILE` across a few play sessions and merge the
+addresses it prints. `make recomp-selftest` checks every generated instruction
+against the interpreter with random registers and memory.
+
+`tools/retro/stats32x.sh` takes the same arguments as `retro-run` and reports
+how many arcade frames ran per 32X frame. PicoDrive doesn't model ROM wait
+states, so real hardware will be somewhat slower than it reports.
+
 ## License
 
 GPL-3.0-or-later, see `LICENSE`. The 6809 core in `third_party/mc6809/` is

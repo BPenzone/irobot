@@ -60,6 +60,7 @@ int m_main(void)
     init_frame_buffers();
     MARS_SYS_INTMSK |= 0x08;    // VBlank interrupt for palette updates
 
+    ir_use_recompiled = true;
     ir_init(&ir_rom_image);
 
     uint32_t last = master_vblank_count();

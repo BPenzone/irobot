@@ -1,19 +1,38 @@
 CC      ?= cc
 CFLAGS  ?= -std=gnu99 -O2 -g -Wall -Wextra -Wno-unused-parameter
 BUILD   := build
+B32     := $(BUILD)/32x
 
 COMMON  := src/common/machine.c src/common/mathbox.c src/common/raster.c \
            src/common/image.c
 CPU     := third_party/mc6809/mc6809.c
 HEADERS := src/common/*.h third_party/mc6809/mc6809.h
 
-.PHONY: all clean roms 32x
+.PHONY: all clean roms 32x recomp-selftest
 
 all: $(BUILD)/irobot-harness
 
-$(BUILD)/irobot-harness: harness/main.c $(COMMON) src/common/video_soft.c $(CPU) $(HEADERS)
+$(BUILD)/irobot-harness: harness/main.c $(COMMON) src/common/video_soft.c $(CPU) $(HEADERS) $(BUILD)/recomp.o
 	@mkdir -p $(BUILD)/snaps
-	$(CC) $(CFLAGS) -o $@ harness/main.c $(COMMON) src/common/video_soft.c $(CPU) -Wno-bool-compare -Wno-sign-compare
+	$(CC) $(CFLAGS) -DIR_HINTS -o $@ harness/main.c $(COMMON) src/common/video_soft.c $(CPU) $(BUILD)/recomp.o \
+		-Wno-bool-compare -Wno-sign-compare
+
+# The 6809 program translated to C (from the ROMs, so it stays in build/).
+RECOMP_HINTS := tools/recomp/hints.txt
+$(BUILD)/recomp.c: tools/recomp/recomp.py $(B32)/irobot.img $(wildcard $(RECOMP_HINTS))
+	python3 tools/recomp/recomp.py $(B32)/irobot.img $@ --exit-at 8E5E \
+		$(if $(wildcard $(RECOMP_HINTS)),--hints $(RECOMP_HINTS))
+
+$(BUILD)/recomp.o: $(BUILD)/recomp.c src/common/rc_runtime.h third_party/mc6809/mc6809.h
+	$(CC) -O2 -c -o $@ $< -Isrc/common -Wno-bool-compare
+
+# Differential test of the recompiler against the interpreter.
+recomp-selftest:
+	@mkdir -p $(BUILD)
+	python3 tools/recomp/recomp.py --selftest $(BUILD)/rc_selftest.c --count 20000
+	$(CC) -O1 -DRC_SELFTEST -Isrc/common -o $(BUILD)/rc-selftest tools/recomp/selftest.c \
+		$(BUILD)/rc_selftest.c $(CPU) -Wno-bool-compare
+	$(BUILD)/rc-selftest
 
 # Unpack a MAME irobot.zip from roms/ into roms/irobot/
 roms:
@@ -29,7 +48,6 @@ clean:
 # gcc (Ubuntu: gcc-m68k-linux-gnu), plus the ROMs in roms/irobot/.
 # ---------------------------------------------------------------------------
 
-B32     := $(BUILD)/32x
 SHCC    := sh-elf-gcc
 SHOBJC  := sh-elf-objcopy
 MDCC    := m68k-linux-gnu-gcc
@@ -42,7 +60,8 @@ SHFLAGS := -m2 -mb -O2 -std=gnu99 -ffreestanding -fomit-frame-pointer \
 MDFLAGS := -m68000 -O2 -std=gnu99 -ffreestanding -fomit-frame-pointer -Wall
 
 SH_C    := $(COMMON) $(CPU) src/32x/video_32x.c src/32x/sh_main.c
-SH_OBJ  := $(patsubst %.c,$(B32)/sh/%.o,$(SH_C)) $(B32)/sh/mars_start.o $(B32)/sh/image.o
+SH_GEN  := $(B32)/sh/recomp.o
+SH_OBJ  := $(patsubst %.c,$(B32)/sh/%.o,$(SH_C)) $(SH_GEN) $(B32)/sh/mars_start.o $(B32)/sh/image.o
 MD_OBJ  := $(B32)/md/md_start.o $(B32)/md/md_main.o
 
 32x: $(BUILD)/irobot.32x
@@ -58,6 +77,10 @@ $(B32)/irobot.elf: $(SH_OBJ) $(MARSDEV)/mars.ld
 $(B32)/sh/%.o: %.c $(HEADERS) src/32x/shared.h
 	@mkdir -p $(dir $@)
 	$(SHCC) $(SHFLAGS) -c $< -o $@
+
+$(B32)/sh/recomp.o: $(BUILD)/recomp.c src/common/rc_runtime.h
+	@mkdir -p $(dir $@)
+	$(SHCC) $(SHFLAGS) -Isrc/common -c $< -o $@
 
 $(B32)/sh/mars_start.o: $(MARSDEV)/mars_start.s $(B32)/md_start.bin
 	@mkdir -p $(dir $@)

@@ -14,11 +14,12 @@
 #include <string.h>
 
 #include "internal.h"
-#include "../../third_party/mc6809/mc6809.h"
+#include "rc_runtime.h"
 
 void mc6809_reset(mc6809__t *cpu);
 MC6809_RESULT mc6809_step(mc6809__t *cpu);
 
+bool ir_use_recompiled = false;
 uint8_t ir_dip_3j = 0x00;
 uint8_t ir_dip_5e = 0xFF;
 bool ir_double_speed = false;
@@ -39,12 +40,12 @@ static uint32_t dlist_used;
 static int32_t dlist_buffer[IR_DLIST_WORDS];
 #endif
 
-static mc6809__t cpu;
+mc6809__t ir_cpu;
 static ir_stats_t stats;
 static ir_inputs_t in;
 
 // Memory
-static uint8_t ram_0000[0x800];
+uint8_t ir_ram0[0x800];   // also used directly by recompiled code
 static uint8_t ram_0800[3][0x800];
 static uint8_t comram[2][0x2000];
 static uint8_t alpha_ram[0x400];
@@ -104,10 +105,10 @@ static void map(uint8_t first, uint8_t last, uint8_t *rd, uint8_t *wr,
     for (unsigned p = first; p <= last; p++)
     {
         unsigned off = (p - first) << 8;
-        cpu.ReadPointer[p] = rd ? rd + off : NULL;
-        cpu.WritePointer[p] = wr ? wr + off : NULL;
-        cpu.ReadFunction[p] = rf;
-        cpu.WriteFunction[p] = wf;
+        ir_cpu.ReadPointer[p] = rd ? rd + off : NULL;
+        ir_cpu.WritePointer[p] = wr ? wr + off : NULL;
+        ir_cpu.ReadFunction[p] = rf;
+        ir_cpu.WriteFunction[p] = wf;
     }
 }
 
@@ -171,9 +172,13 @@ static void bank_0800(void)
         map(0x08, 0x0F, NULL, NULL, read_unmapped, write_unmapped);
 }
 
+uint8_t ir_prog_bank;
+uint32_t rc_limit;
+
 static void bank_4000(void)
 {
     int bank = (out1 >> 1) & 7;
+    ir_prog_bank = (uint8_t)bank;
     if (bank < 6)
         map(0x40, 0x5F, (uint8_t *)image->prog_banked[bank], NULL, NULL, ignore_write);
     else
@@ -244,7 +249,8 @@ static void write_statwr(uint8_t data)
     if ((changed & STATWR_MATH_START) && (data & STATWR_MATH_START))
     {
         ir_mathbox_start(&stats);
-        cpu.FIRQ = true;
+        ir_cpu.FIRQ = true;
+        rc_limit = ir_cpu.Clock;    // leave recompiled code to take it
     }
 
     // EXT_START (active low) asks the video processor to draw the list.
@@ -255,7 +261,7 @@ static void write_statwr(uint8_t data)
 static void write_11xx(uint16 addr, uint8 data)
 {
     if (addr <= 0x113F)
-        cpu.IRQ = false;
+        ir_cpu.IRQ = false;
     else if (addr <= 0x117F)
         write_statwr(data);
     else if (addr <= 0x11BF)
@@ -268,6 +274,9 @@ static void write_11xx(uint16 addr, uint8 data)
     {
         out1 = data;
         bank_4000();
+        // Recompiled code chains blocks within the bank it started in, so
+        // make it come back to the dispatcher after a bank switch.
+        rc_limit = ir_cpu.Clock;
     }
 }
 
@@ -298,7 +307,7 @@ static uint8 read_14xx(uint16 addr)
     lfsr ^= lfsr << 13;
     lfsr ^= lfsr >> 17;
     lfsr ^= lfsr << 5;
-    return (uint8_t)(lfsr ^ (uint32_t)cpu.Clock);
+    return (uint8_t)(lfsr ^ (uint32_t)ir_cpu.Clock);
 }
 
 static void write_18xx(uint16 addr, uint8 data)
@@ -316,7 +325,7 @@ static void write_18xx(uint16 addr, uint8 data)
 static void write_1axx(uint16 addr, uint8 data)
 {
     (void)addr; (void)data;
-    cpu.FIRQ = false;
+    ir_cpu.FIRQ = false;
 }
 
 static void write_1bxx(uint16 addr, uint8 data)
@@ -360,8 +369,8 @@ static void load_image(const ir_image_t *img)
 void ir_init(const ir_image_t *img)
 {
     memset(&stats, 0, sizeof stats);
-    memset(&cpu, 0, sizeof cpu);
-    memset(ram_0000, 0, sizeof ram_0000);
+    memset(&ir_cpu, 0, sizeof ir_cpu);
+    memset(ir_ram0, 0, sizeof ir_ram0);
     memset(ram_0800, 0, sizeof ram_0800);
     memset(comram, 0, sizeof comram);
     memset(alpha_ram, 0, sizeof alpha_ram);
@@ -376,7 +385,7 @@ void ir_init(const ir_image_t *img)
     dlist_used = 0;
 
     map(0x00, 0xFF, NULL, NULL, read_unmapped, write_unmapped);
-    map(0x00, 0x07, ram_0000, ram_0000, NULL, NULL);
+    map(0x00, 0x07, ir_ram0, ir_ram0, NULL, NULL);
     map(0x10, 0x10, NULL, NULL, read_10xx, write_unmapped);
     map(0x11, 0x11, NULL, NULL, read_unmapped, write_11xx);
     map(0x12, 0x12, NULL, NULL, read_12xx, write_12xx);
@@ -398,12 +407,39 @@ void ir_init(const ir_image_t *img)
     bank_2000();
     bank_4000();
 
-    mc6809_reset(&cpu);
+    mc6809_reset(&ir_cpu);
 }
 
 // ---------------------------------------------------------------------------
 // Frame loop
 // ---------------------------------------------------------------------------
+
+#ifdef IR_HINTS
+#include <stdio.h>
+FILE *ir_hints_file;
+
+// Remember each address once per bank so the hints file stays small.
+static void record_hint(uint16_t pc)
+{
+    static uint8_t seen[7][0x10000 / 8];
+    int ctx = pc >= 0x6000 ? 6 : ir_prog_bank;
+    if (ctx > 6 || (seen[ctx][pc >> 3] & (1 << (pc & 7))))
+        return;
+    seen[ctx][pc >> 3] |= (uint8_t)(1 << (pc & 7));
+    if (ctx == 6)
+        fprintf(ir_hints_file, "F %04X\n", pc);
+    else
+        fprintf(ir_hints_file, "%d %04X\n", ctx, pc);
+}
+#endif
+
+#define IDLE_LOOP_PC    0x8E5E
+#define IDLE_FLAG       0x07F0
+
+static inline bool interrupt_pending(void)
+{
+    return (ir_cpu.IRQ && !ir_cpu.CC_I) || (ir_cpu.FIRQ && !ir_cpu.CC_F) || ir_cpu.NMI;
+}
 
 bool ir_run_frame(const ir_inputs_t *inputs)
 {
@@ -413,7 +449,7 @@ bool ir_run_frame(const ir_inputs_t *inputs)
     const uint64_t clock = ir_double_speed ? 2ull * IR_CPU_HZ : IR_CPU_HZ;
     const uint32_t slice = (uint32_t)((clock * IR_DOTS_PER_LINE * 16 << 16) / IR_DOT_CLOCK_HZ);
     static uint32_t frac;
-    static uint64_t target;
+    static uint32_t target;
 
     for (int s = 0; s < IR_SCANLINES / 16; s++)
     {
@@ -421,9 +457,34 @@ bool ir_run_frame(const ir_inputs_t *inputs)
         target += frac >> 16;
         frac &= 0xFFFF;
 
-        while ((int64_t)(cpu.Clock - target) < 0)
+        while ((int32_t)(ir_cpu.Clock - target) < 0)
         {
-            if (mc6809_step(&cpu) != MC6809_RESULT_OK)
+            // The main loop idles at $8E5E (LDA $07F0 / BEQ $8E5E) until the
+            // IRQ handler sets $07F0. Nothing can change it before the next
+            // interrupt, so skip to the end of the slice instead of spinning.
+            if (ir_cpu.PC.w == IDLE_LOOP_PC && !ir_ram0[IDLE_FLAG] && !interrupt_pending())
+            {
+                stats.idle_cycles += target - ir_cpu.Clock;
+                ir_cpu.Clock = target;
+                break;
+            }
+            if (ir_use_recompiled && !interrupt_pending())
+            {
+                void *b = rc_dispatch(ir_cpu.PC.w);
+                if (b)
+                {
+                    rc_limit = target;
+                    while ((b = ((rc_block_t)b)()))
+                        ;
+                    continue;
+                }
+                stats.interpreted++;
+#ifdef IR_HINTS
+                if (ir_hints_file && ir_cpu.PC.w >= 0x4000)
+                    record_hint(ir_cpu.PC.w);
+#endif
+            }
+            if (mc6809_step(&ir_cpu) != MC6809_RESULT_OK)
             {
                 stats.cpu_faults++;
                 return false;
@@ -434,7 +495,7 @@ bool ir_run_frame(const ir_inputs_t *inputs)
         // hardware 32 lines later if not acknowledged.
         scanline = (scanline + 16) & 0xFF;
         if (scanline & 0x10)
-            cpu.IRQ = ((scanline - 16) & 0x20) != 0;
+            ir_cpu.IRQ = ((scanline - 16) & 0x20) != 0;
     }
 
     stats.frames++;

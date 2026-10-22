@@ -1,0 +1,7 @@
+# Arcade ROMs and anything derived from them never go in the repo.
+roms/
+*.zip
+*.bin
+generated/
+build/
+*.32x

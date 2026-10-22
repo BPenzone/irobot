@@ -245,6 +245,24 @@ static void picodrive_dump(void *core, const char *path)
         fwrite(prof, 4, 2 * 0x240000, f);
         fclose(f);
     }
+    // ...and with the timing model, cache misses and uncached accesses.
+    const unsigned *hist = dlsym(core, "tm_rom_hist");
+    char hist_path[1024];
+    snprintf(hist_path, sizeof hist_path, "%s.miss", path);
+    if (hist && (f = fopen(hist_path, "wb")))
+    {
+        fwrite(hist, 4, 2 * 4096, f);
+        const unsigned *sd = dlsym(core, "tm_sdram_hist");
+        if (sd)
+            fwrite(sd, 4, 2 * 256, f);
+        fclose(f);
+    }
+    const unsigned *tm = dlsym(core, "tm_stats");
+    if (tm)
+        for (int i = 0; i < 2; i++)
+            printf("%s misses rom %u sdram %u fb %u, uncached rom %u sdram %u fb %u\n",
+                   i ? "slave " : "master", tm[i * 8], tm[i * 8 + 1], tm[i * 8 + 2],
+                   tm[i * 8 + 3], tm[i * 8 + 4], tm[i * 8 + 5]);
     for (int i = 0; i < 2; i++)
     {
         const uint8_t *s = sh2s + i * PD_SH2_SIZE;

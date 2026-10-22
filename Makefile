@@ -19,9 +19,11 @@ $(BUILD)/irobot-harness: harness/main.c harness/reference.c harness/reference.h 
 
 # The 6809 program translated to C (from the ROMs, so it stays in build/).
 RECOMP_HINTS := tools/recomp/hints.txt
-$(BUILD)/recomp.c: tools/recomp/recomp.py $(B32)/irobot.img $(wildcard $(RECOMP_HINTS))
+RECOMP_HOT   := tools/recomp/hot.txt
+$(BUILD)/recomp.c: tools/recomp/recomp.py $(B32)/irobot.img $(wildcard $(RECOMP_HINTS) $(RECOMP_HOT))
 	python3 tools/recomp/recomp.py $(B32)/irobot.img $@ --exit-at 8E5E \
-		$(if $(wildcard $(RECOMP_HINTS)),--hints $(RECOMP_HINTS))
+		$(if $(wildcard $(RECOMP_HINTS)),--hints $(RECOMP_HINTS)) \
+		$(if $(wildcard $(RECOMP_HOT)),--hot $(RECOMP_HOT))
 
 $(BUILD)/recomp.o: $(BUILD)/recomp.c src/common/rc_runtime.h third_party/mc6809/mc6809.h
 	$(CC) -O2 -c -o $@ $< -Isrc/common -Wno-bool-compare
@@ -56,7 +58,7 @@ MARSDEV := third_party/marsdev
 
 SHFLAGS := -m2 -mb -O2 -std=gnu99 -ffreestanding -fomit-frame-pointer \
            -Wall -Wextra -Wno-unused-parameter -Wno-bool-compare -Wno-sign-compare \
-           -DIR_DLIST_EXTERNAL -DIR_DLIST_WORDS=6144 -DIR_PIXEL_BASE=1
+           -DIR_DLIST_EXTERNAL -DIR_DLIST_WORDS=1024 -DIR_PIXEL_BASE=1
 MDFLAGS := -m68000 -O2 -std=gnu99 -ffreestanding -fomit-frame-pointer -Wall
 
 SH_C    := $(COMMON) $(CPU) src/32x/video_32x.c src/32x/sound_32x.c src/32x/sh_main.c
@@ -80,7 +82,7 @@ $(B32)/sh/%.o: %.c $(HEADERS) src/32x/shared.h
 
 $(B32)/sh/recomp.o: $(BUILD)/recomp.c src/common/rc_runtime.h
 	@mkdir -p $(dir $@)
-	$(SHCC) $(SHFLAGS) -Isrc/common -c $< -o $@
+	$(SHCC) $(filter-out -O2,$(SHFLAGS)) -Os -DRC_HOT_SECTION -DRC_TAILCALL -Isrc/common -c $< -o $@
 
 $(B32)/sh/mars_start.o: $(MARSDEV)/mars_start.s $(B32)/md_start.bin
 	@mkdir -p $(dir $@)

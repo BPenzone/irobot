@@ -6,3 +6,4 @@ generated/
 build/
 *.32x
 *.img
+__pycache__/

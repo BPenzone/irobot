@@ -30,6 +30,7 @@ enum
 {
     SLAVE_DRAW = 1,     // draw display list `arg`
     SLAVE_FLIP,         // overlay the alphanumerics, then show the back buffer
+    SLAVE_MATH,         // run the math box command copied to math_copy
 };
 
 void slave_main_loop(void);

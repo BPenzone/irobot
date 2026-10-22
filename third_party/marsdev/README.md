@@ -14,5 +14,6 @@ From the `examples/32x-skeleton` project of
   block at $3F0. Changed: no font upload; `read_joypad` reads its argument at
   the offset gcc uses without `-mshort`.
 - `mars.h`, `common.h` register definitions.
-- `mars.ld`, `md.ld` linker scripts. Changed: the hot code (6809 core, machine,
-  math box, sound) is placed in SDRAM rather than ROM.
+- `mars.ld`, `md.ld` linker scripts. Changed: the hot code (machine, math box,
+  sound, and the recompiled blocks in the `.rc_hot` section) is placed in
+  SDRAM rather than ROM, with a check that it fits.

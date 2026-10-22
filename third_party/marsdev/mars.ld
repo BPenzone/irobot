@@ -35,7 +35,7 @@ PROVIDE (__stack = 0x0603FC00);
 
 SECTIONS {
 	.text 0x02000000 : AT(0x00000000) {
-		*(EXCLUDE_FILE(*mc6809.o *machine.o *mathbox.o *pokey.o *sound_32x.o) .text EXCLUDE_FILE(*mc6809.o *machine.o *mathbox.o *pokey.o *sound_32x.o) .text.*)
+		*(EXCLUDE_FILE(*machine.o *mathbox.o *pokey.o *sound_32x.o) .text EXCLUDE_FILE(*machine.o *mathbox.o *pokey.o *sound_32x.o) .text.*)
 		. = ALIGN(0x4);
 
 		__CTOR_LIST__ = .;
@@ -75,11 +75,11 @@ SECTIONS {
 		*(.got.plt) *(.got)
 		*(.shdata)
 		*(.data .data.*)
-		*mc6809.o(.text .text.*)
 		*machine.o(.text .text.*)
 		*mathbox.o(.text .text.*)
 		*pokey.o(.text .text.*)
 		*sound_32x.o(.text .text.*)
+		*(.rc_hot)
 		_edata = .;
 		. = ALIGN(0x4);
 	} > ram
@@ -95,6 +95,10 @@ SECTIONS {
 		__end = _end;
 		end = _end;
 	} > ram
+
+	/* Keep 6 KB below the master's stack (0x0603F000); the code placed in
+	 * SDRAM (tools/recomp/hot.txt) is sized to fit. */
+	ASSERT(_end <= 0x0603D800, "SDRAM is full: shorten tools/recomp/hot.txt")
 
 	.eh_frame 0 (NOLOAD) :
 	{

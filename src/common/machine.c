@@ -34,10 +34,10 @@ static uint16_t math_rom_host[0x6000];
 #endif
 
 // Display list being filled by the math box.
-static int32_t *dlist;
+static ir_dword_t *dlist;
 static uint32_t dlist_used;
 #ifndef IR_DLIST_EXTERNAL
-static int32_t dlist_buffer[IR_DLIST_WORDS];
+static ir_dword_t dlist_buffer[IR_DLIST_WORDS];
 #endif
 
 mc6809__t ir_cpu;
@@ -90,9 +90,9 @@ void ir_dlist_add(int type, int color, const int32_t *xy, int count)
         count = IR_MAX_POINTS;
     if (dlist_used + 1 + (uint32_t)count * 2 > IR_DLIST_WORDS)
         ir_dlist_flush();
-    dlist[dlist_used++] = (int32_t)((type << 12) | (count << 6) | (color & 0x3F));
+    dlist[dlist_used++] = (ir_dword_t)((type << 12) | (count << 6) | (color & 0x3F));
     for (int n = 0; n < count * 2; n++)
-        dlist[dlist_used++] = xy[n];
+        dlist[dlist_used++] = (ir_dword_t)(xy[n] < -32768 ? -32768 : xy[n] > 32767 ? 32767 : xy[n]);
 }
 
 // ---------------------------------------------------------------------------
@@ -137,8 +137,11 @@ static uint8 read_mathram(uint16 addr)
     return (addr & 1) ? (uint8_t)w : (uint8_t)(w >> 8);
 }
 
+uint8_t ir_math_dirty[IR_MATH_CHUNKS];
+
 static void write_mathram(uint16 addr, uint8 data)
 {
+    ir_math_dirty[(addr & 0x1FFF) >> 7] = 0xFF;
     uint16_t *w = &ir_math_ram[(addr & 0x1FFF) >> 1];
     if (addr & 1)
         *w = (uint16_t)((*w & 0xFF00) | data);
@@ -178,8 +181,16 @@ uint32_t rc_limit;
 static void bank_4000(void)
 {
     int bank = (out1 >> 1) & 7;
+    bool was_rom = ir_prog_bank < 6;
     ir_prog_bank = (uint8_t)bank;
-    if (bank < 6)
+    if (bank < 6 && was_rom)
+    {
+        // Only the read pointers change between ROM banks.
+        const uint8_t *rom = image->prog_banked[bank];
+        for (unsigned p = 0; p < 0x20; p++)
+            ir_cpu.ReadPointer[0x40 + p] = (uint8_t *)rom + (p << 8);
+    }
+    else if (bank < 6)
         map(0x40, 0x5F, (uint8_t *)image->prog_banked[bank], NULL, NULL, ignore_write);
     else
         map(0x40, 0x5F, NULL, NULL, read_unmapped, write_unmapped);
@@ -250,14 +261,14 @@ static void write_statwr(uint8_t data)
     {
         if (dlist_used + 1 > IR_DLIST_WORDS)
             ir_dlist_flush();
-        dlist[dlist_used++] = IR_CMD_ERASE << 12;
+        dlist[dlist_used++] = (ir_dword_t)(IR_CMD_ERASE << 12);
     }
 
     if ((changed & STATWR_MATH_START) && (data & STATWR_MATH_START))
     {
         if (ir_ref_math_start)
             ir_ref_math_start(ir_math_ram, &image->mathrom_be[0][0], &comram[0][0]);
-        else
+        else if (!ir_video_mathbox(&stats))
             ir_mathbox_start(&stats);
         ir_cpu.FIRQ = true;
         rc_limit = ir_cpu.Clock;    // leave recompiled code to take it
@@ -276,9 +287,13 @@ static void write_11xx(uint16 addr, uint8 data)
         write_statwr(data);
     else if (addr <= 0x11BF)
     {
+        // Remapping costs 32 pages, and the game rewrites this often.
+        uint8_t changed = out0 ^ data;
         out0 = data;
-        bank_0800();
-        bank_2000();
+        if (changed & 0x60)
+            bank_0800();
+        if (changed & 0x1E)
+            bank_2000();
     }
     else
     {
@@ -413,6 +428,7 @@ void ir_init(const ir_image_t *img)
     memset(comram, 0, sizeof comram);
     memset(alpha_ram, 0, sizeof alpha_ram);
     memset(ir_math_ram, 0, sizeof ir_math_ram);
+    memset(ir_math_dirty, 0xFF, sizeof ir_math_dirty);
     load_image(img);
     ir_video_reset();
 #ifdef IR_DLIST_EXTERNAL
@@ -443,6 +459,7 @@ void ir_init(const ir_image_t *img)
     scanline = 0;
     bank_0800();
     bank_2000();
+    ir_prog_bank = 7;       // nothing mapped yet: map it all
     bank_4000();
 
     mc6809_reset(&ir_cpu);
@@ -479,6 +496,31 @@ static inline bool interrupt_pending(void)
     return (ir_cpu.IRQ && !ir_cpu.CC_I) || (ir_cpu.FIRQ && !ir_cpu.CC_F) || ir_cpu.NMI;
 }
 
+// Take an IRQ as mc6809_step would, for the recompiled build: the
+// interpreter is slow to reach from the 32X's cartridge ROM.
+static void take_irq(void)
+{
+    mc6809__t *c = &ir_cpu;
+    c->Clock += 19;
+    c->CC_E = true;
+    uint8_t cc = (uint8_t)(c->CC_C | c->CC_V << 1 | c->CC_Z << 2 | c->CC_N << 3 |
+                           c->CC_I << 4 | c->CC_H << 5 | c->CC_F << 6 | c->CC_E << 7);
+    const uint8_t push[12] = { c->PC.b[LSB], c->PC.b[MSB], c->U.b[LSB], c->U.b[MSB],
+                               c->Y.b[LSB], c->Y.b[MSB], c->X.b[LSB], c->X.b[MSB],
+                               c->DP, c->B, c->A, cc };
+    for (int i = 0; i < 12; i++)
+    {
+        uint16_t a = --c->S.w;
+        uint8_t *p = c->WritePointer[a >> 8];
+        if (p)
+            p[a & 0xFF] = push[i];
+        else
+            c->WriteFunction[a >> 8](a, push[i]);
+    }
+    c->CC_I = true;
+    c->PC.w = (uint16_t)(image->prog_fixed[0xFFF8 - 0x6000] << 8 | image->prog_fixed[0xFFF9 - 0x6000]);
+}
+
 bool ir_run_frame(const ir_inputs_t *inputs)
 {
     in = *inputs;
@@ -509,6 +551,9 @@ bool ir_run_frame(const ir_inputs_t *inputs)
                 ir_cpu.Clock = target;
                 break;
             }
+            if (ir_use_recompiled && ir_cpu.IRQ && !ir_cpu.CC_I && !ir_cpu.NMI &&
+                !(ir_cpu.FIRQ && !ir_cpu.CC_F) && !ir_cpu.CWAI && !ir_cpu.SYNC)
+                take_irq();
             if (ir_use_recompiled && !interrupt_pending())
             {
                 void *b = rc_dispatch(ir_cpu.PC.w);

@@ -200,7 +200,7 @@ M68K_CODE:
 		.long   slav_err    /* TRAPA #63 */
 		.long   slav_irq    /* Level 1 IRQ */
 		.long   slav_irq    /* Level 2 & 3 IRQ's */
-		.long   slav_irq    /* Level 4 & 5 IRQ's */
+		.long   slav_dma_irq /* Level 4 & 5 IRQ's, used for DMA channel 1 */
 		.long   slav_irq    /* PWM interupt */
 		.long   slav_irq    /* Command interupt */
 		.long   slav_irq    /* H Blank interupt */
@@ -543,6 +543,42 @@ mvri_master_vres:
 slav_err:
 		rte
 		nop
+
+! Slave DMA channel 1 end interrupt: call slave_dma1() with the C scratch
+! registers saved
+
+slav_dma_irq:
+		mov.l   r0,@-r15
+		mov.l   r1,@-r15
+		mov.l   r2,@-r15
+		mov.l   r3,@-r15
+		mov.l   r4,@-r15
+		mov.l   r5,@-r15
+		mov.l   r6,@-r15
+		mov.l   r7,@-r15
+		sts.l   pr,@-r15
+		sts.l   macl,@-r15
+		sts.l   mach,@-r15
+		mov.l   sdi_handler,r0
+		jsr     @r0
+		nop
+		lds.l   @r15+,mach
+		lds.l   @r15+,macl
+		lds.l   @r15+,pr
+		mov.l   @r15+,r7
+		mov.l   @r15+,r6
+		mov.l   @r15+,r5
+		mov.l   @r15+,r4
+		mov.l   @r15+,r3
+		mov.l   @r15+,r2
+		mov.l   @r15+,r1
+		mov.l   @r15+,r0
+		rte
+		nop
+
+		.align  2
+sdi_handler:
+		.long   _slave_dma1
 
 ! Slave IRQ handler
 

@@ -10,6 +10,7 @@
 //                          both frame buffers to FILE.fb (and the SH-2 profile
 //                          to FILE.prof, see tools/retro/prof32x.py), and
 //                          print both SH-2 PCs (PicoDrive only)
+//   --wav FILE             record the core's sound output to FILE
 //   The environment variable RETRO_DRC sets the core's picodrive_drc option.
 
 #include <dlfcn.h>
@@ -108,8 +109,38 @@ static void video(const void *data, unsigned w, unsigned h, size_t pitch)
     }
 }
 
-static void audio(int16_t l, int16_t r) {}
-static size_t audio_batch(const int16_t *d, size_t frames) { return frames; }
+static FILE *wav;
+static uint32_t wav_frames;
+
+static void audio(int16_t l, int16_t r)
+{
+    int16_t f[2] = { l, r };
+    if (wav)
+        wav_frames += (uint32_t)fwrite(f, 4, 1, wav);
+}
+
+static size_t audio_batch(const int16_t *d, size_t frames)
+{
+    if (wav)
+        wav_frames += (uint32_t)fwrite(d, 4, frames, wav);
+    return frames;
+}
+
+// 16-bit stereo WAV header for wav_frames frames at `rate`.
+static void wav_header(uint32_t rate)
+{
+    uint32_t bytes = wav_frames * 4;
+    uint8_t h[44] = "RIFF....WAVEfmt ";
+    uint32_t v[] = { 16, 1 | (2 << 16), rate, rate * 4, 4 | (16 << 16) };
+    memcpy(h + 16, v, sizeof v);
+    memcpy(h + 36, "data", 4);
+    uint32_t riff = 36 + bytes;
+    memcpy(h + 4, &riff, 4);
+    memcpy(h + 40, &bytes, 4);
+    fseek(wav, 0, SEEK_SET);
+    fwrite(h, 1, 44, wav);
+    fseek(wav, 0, SEEK_END);
+}
 static void input_poll(void) {}
 
 static int16_t input_state(unsigned port, unsigned device, unsigned index, unsigned id)
@@ -247,6 +278,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--out") && v)        { out_dir = v; i++; }
         else if (!strcmp(a, "--hash"))            hash = true;
         else if (!strcmp(a, "--picodrive-dump") && v) { dump_path = v; i++; }
+        else if (!strcmp(a, "--wav") && v)        { wav = fopen(v, "wb"); i++; }
         else if (!strcmp(a, "--snap") && v)
         {
             char *s = strdup(v);
@@ -326,6 +358,18 @@ int main(int argc, char **argv)
     }
     p_retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
 
+    uint32_t wav_rate = 44100;
+    void (*get_av_info)(struct retro_system_av_info *) =
+        (void (*)(struct retro_system_av_info *))dlsym(core, "retro_get_system_av_info");
+    if (get_av_info)
+    {
+        struct retro_system_av_info av;
+        get_av_info(&av);
+        wav_rate = (uint32_t)(av.timing.sample_rate + 0.5);
+    }
+    if (wav)
+        wav_header(wav_rate);
+
     for (int frame = 1; frame <= frames; frame++)
     {
         memset(pad, 0, sizeof pad);
@@ -354,5 +398,10 @@ int main(int argc, char **argv)
 
     if (dump_path)
         picodrive_dump(core, dump_path);
+    if (wav)
+    {
+        wav_header(wav_rate);
+        fclose(wav);
+    }
     return 0;
 }

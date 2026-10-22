@@ -19,6 +19,7 @@
 //   --reference       run the math box microcode and draw like the video
 //                     processor (harness/reference.c) instead of the
 //                     high-level math box, for comparison
+//   --wav FILE        record the sound to FILE (44.1 kHz, 16-bit mono)
 //   --hints FILE      append (bank, address) of code the recompiler missed to
 //                     FILE, for tools/recomp/recomp.py --hints
 
@@ -27,6 +28,7 @@
 #include <string.h>
 
 #include "../src/common/irobot.h"
+#include "../src/common/pokey.h"
 #include "reference.h"
 
 extern void (*ir_ref_math_start)(uint16_t *math_ram, const uint8_t *math_rom_be, uint8_t *comram);
@@ -36,6 +38,71 @@ extern const uint8_t *(*ir_display_override)(void);
 extern FILE *ir_hints_file;    // machine.c, built with IR_HINTS
 
 #define MAX_PRESSES 256
+
+// Sound recording: the frame's POKEY writes are replayed at their times
+// within the frame, and the output goes through a DC-blocking filter like
+// the coupling capacitors of the real amplifier.
+#define WAV_RATE 44100
+
+static FILE *wav;
+static uint32_t wav_samples;
+
+static void wav_header(void)
+{
+    uint32_t bytes = wav_samples * 2;
+    uint8_t h[44] = "RIFF....WAVEfmt ";
+    uint32_t v[] = { 16, 1 | (1 << 16), WAV_RATE, WAV_RATE * 2, 2 | (16 << 16) };
+    memcpy(h + 16, v, sizeof v);
+    memcpy(h + 36, "data", 4);
+    uint32_t riff = 36 + bytes;
+    memcpy(h + 4, &riff, 4);
+    memcpy(h + 40, &bytes, 4);
+    fseek(wav, 0, SEEK_SET);
+    fwrite(h, 1, 44, wav);
+    fseek(wav, 0, SEEK_END);
+}
+
+static void wav_frame(void)
+{
+    static uint64_t due;    // samples owed, 32.32
+    static int32_t x1, y1;  // filter state, 16.16
+    static int16_t buf[4096];
+
+    uint32_t cycles = ir_frame_cycles();
+    due += ((uint64_t)WAV_RATE * cycles << 32) / IR_CPU_HZ;
+    int n = (int)(due >> 32);
+    due &= 0xFFFFFFFFu;
+    if (n > 4096)
+        n = 4096;
+
+    int count, at = 0;
+    const ir_sound_write_t *w = ir_sound_writes(&count);
+    for (int i = 0; i <= count; i++)
+    {
+        int pos = i < count ? (int)((uint64_t)w[i].time * n / cycles) : n;
+        if (pos > n)
+            pos = n;
+        if (pos > at)
+        {
+            ir_pokey_render(buf + at, pos - at);
+            at = pos;
+        }
+        if (i < count)
+            ir_pokey_write(w[i].reg, w[i].data);
+    }
+
+    for (int i = 0; i < n; i++)
+    {
+        int32_t x = buf[i] << 16;
+        int32_t y = x - x1 + y1 - (y1 >> 9);    // about 14 Hz
+        x1 = x;
+        y1 = y;
+        int32_t s = (y >> 16) * 400;
+        int16_t out = (int16_t)(s > 32767 ? 32767 : s < -32768 ? -32768 : s);
+        fwrite(&out, 2, 1, wav);
+    }
+    wav_samples += (uint32_t)n;
+}
 
 typedef struct { int frame, length; char button[16]; } press_t;
 
@@ -168,6 +235,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--hash"))            hash = true;
         else if (!strcmp(a, "--recomp"))          ir_use_recompiled = true;
         else if (!strcmp(a, "--reference"))       reference = true;
+        else if (!strcmp(a, "--wav") && v)        { wav = fopen(v, "wb"); i++; }
         else if (!strcmp(a, "--hints") && v)      { ir_hints_file = fopen(v, "a"); i++; }
         else if (!strcmp(a, "--text") && v)       { text_list = strdup(v); i++; }
         else
@@ -216,6 +284,11 @@ int main(int argc, char **argv)
         ir_display_override = ref_display_bitmap;
     }
     ir_init(&image);
+    if (wav)
+    {
+        ir_pokey_init(WAV_RATE);
+        wav_header();
+    }
 
     static uint32_t rgb[IR_SCREEN_W * IR_SCREEN_H];
     ir_inputs_t in;
@@ -230,6 +303,8 @@ int main(int argc, char **argv)
             status = 1;
             break;
         }
+        if (wav)
+            wav_frame();
 
         bool snap = snap_every && frame % snap_every == 0;
         for (int i = 0; i < num_snaps && !snap; i++)
@@ -262,5 +337,10 @@ int main(int argc, char **argv)
         printf("interpreted instructions %u\n", s->interpreted);
     if (ir_hints_file)
         fclose(ir_hints_file);
+    if (wav)
+    {
+        wav_header();
+        fclose(wav);
+    }
     return status;
 }

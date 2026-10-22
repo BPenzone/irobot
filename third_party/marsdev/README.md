@@ -8,9 +8,11 @@ From the `examples/32x-skeleton` project of
   tables and startup. Changed: header names; the master VBlank interrupt calls
   `master_vblank()` in C; the master reloads the status register address
   before releasing the slave SH-2 (the original used a register the preceding
-  call had overwritten, so the slave never started).
+  call had overwritten, so the slave never started); the slave's level 4
+  vector calls `slave_dma1()` in C, for the DMA channel 1 interrupt.
 - `md_start.s` the 68000 boot code, including Sega's standard 32X security
   block at $3F0. Changed: no font upload; `read_joypad` reads its argument at
   the offset gcc uses without `-mshort`.
 - `mars.h`, `common.h` register definitions.
-- `mars.ld`, `md.ld` linker scripts.
+- `mars.ld`, `md.ld` linker scripts. Changed: the hot code (6809 core, machine,
+  math box, sound) is placed in SDRAM rather than ROM.

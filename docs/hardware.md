@@ -27,7 +27,7 @@ Compiled from John Manfreda's I, Robot Project emulator (1998 C version and
 | `$11C0` | Write: program ROM bank select for `$4000-$5FFF` (bits 1-3, banks 0-5) |
 | `$1200-$12FF` | EEPROM (high scores and settings) |
 | `$1300` | Read: unverified register |
-| `$1400-$143F` | Four POKEYs; `$1420` read returns DIP switch bank 5E |
+| `$1400-$143F` | Four POKEYs; `$1420` read returns DIP switch bank 5E, `$1422` is the RANDOM register the game uses |
 | `$1800-$187F` | Color RAM, 64 entries |
 | `$1A00` | Write: FIRQ acknowledge |
 | `$1B00` / `$1B01` | Read: joystick Y / X (ADC) |
@@ -77,6 +77,25 @@ with the recompiled 6809 code without the byte swapping the PC emulators need.
 - Color RAM entry: 2 bits each of red, green and blue, plus 2 intensity bits
   combined with the low address bit; 64 colors on screen.
 - Alphanumeric overlay: tiles from 136029-124 drawn on top of the bitmap.
+
+## Behaviour found while bringing up the harness
+
+- **Software watchdog.** The IRQ handler at `$6006` counts IRQs that arrive
+  during VBLANK in DP `$02`. If the main loop does not reset it before it
+  reaches 32, the handler jumps to `$68FE`, which restarts the game at `$6863`
+  unless the main loop is idling at `$8E5E` waiting for `$07F0`.
+- **POKEY randomness matters.** The object placement loop at `$76D4` reads the
+  POKEY RANDOM register at `$1422` until it finds a spot far enough away. A
+  generator whose successive values are just shifted copies of each other can
+  keep it looping past the watchdog, which shows up as the game returning to
+  attract mode right after the player presses start.
+- **Buffer flip and erase share a write.** The game flips `BUFSEL` and raises
+  `ERASE` in the same `$1140` write. Drawing queued before the write belongs
+  to the old buffer, and the erase applies to the new one.
+- **Sources disagree on two details.** MAME starts the video processor on a
+  rising `EXT_START` (bit 2) and raises VBLANK at scanline 224; the 2020
+  emulator treats `EXT_START` as active low and uses scanline 240. The harness
+  follows the 2020 emulator for now; both work for attract mode and play.
 
 ## Notes for the port
 
